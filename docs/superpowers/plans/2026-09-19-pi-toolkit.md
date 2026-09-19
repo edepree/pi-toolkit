@@ -117,11 +117,11 @@ Node 22.18+ supports the type-stripping test invocation; document that developme
 
 Fetch/read the actual Janitor source and its LICENSE. Adapt the content to the approved spec, not a generic replacement: preserve debt-removal categories, deletion-first philosophy, and incremental validation; remove VS Code/MCP-specific assumptions. Keep the skill concise with valid `name` and `description` frontmatter and clear source attribution.
 
-- [ ] **Step 4: Validate discovery and behavior.**
+- [x] **Step 4: Validate discovery and behavior.**
 
   - [x] Package/skill tests: 2 passed, 0 failed, 0 skipped against Pi 0.85.1; `npm ci`, `npm test`, `npm pack --dry-run`, and `git diff --check` passed. The tarball contains only the four intended package resources.
   - [x] Native Pi install/list and actual resource-loader smoke passed using the extracted tarball and disposable settings: exactly `janitor`, no diagnostics, intact upstream notice. Pi intentionally saves local package paths relative to its settings directory; the harness verifies the resolved target.
-  - [ ] Same-scenario WITH-skill behavioral comparison: assigned to the subsequent reviewer stage. Discovery does not prove compliance; the safe baseline is retained without a fabricated failure.
+  - [x] Same-scenario WITH-skill behavioral comparison: performed by the Task 2 reviewer (run 3a8a1183, output in workflow d8d5059b). Result: skill and baseline reach the same safe decisions — delete nothing of the flagged items, investigate the auth failure, preserve distinct permission coverage, unrelated edits, and dynamic-import usage. Skill adds deletion-first framing, six-category structure, and incremental validation; behavior-preserving, no failure and no improvement demonstrated. Honest limitation: reviewer-authored application of the skill text, not an observed model session; discovery does not prove compliance.
 
 Extend the test to load the skill through Pi's actual skill loader when peer dependencies are installed; assert no discovery warnings and the correct name. Do not use sentence-match tests as proof the agent follows the skill. The parent repeats the same baseline scenario with the skill loaded, then compares the actual responses. Document limitations honestly.
 
