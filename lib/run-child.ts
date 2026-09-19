@@ -19,8 +19,18 @@ export interface ChildOptions {
   expected: { provider: string; model: string; thinkingLevel: NonNullable<ExtensionContext["thinkingLevel"]> };
   signal?: AbortSignal;
   onProgress?: (text: string) => void;
+  onUsage?: (usage: ChildUsage) => void;
 }
-export interface ChildReport { text: string; reportPath?: string }
+export interface ChildUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+  contextTokens: number;
+  turns: number;
+}
+export interface ChildReport { text: string; reportPath?: string; usage?: ChildUsage }
 
 const MAX_RECORD_BYTES = 8 * 1024 * 1024;
 const TERMINATION_GRACE_MS = 500;
@@ -72,15 +82,15 @@ function redactor() {
     return text;
   };
 }
-function saveReport(text: string): ChildReport {
-  if (!truncateHead(text).truncated) return { text };
+function saveReport(text: string, usage?: ChildUsage): ChildReport {
+  if (!truncateHead(text).truncated) return { text, usage };
   const dir = mkdtempSync(join(tmpdir(), "pi-toolkit-report-"));
   const reportPath = join(dir, "report.txt");
   try { writeFileSync(reportPath, text, { mode: 0o600 }); }
   catch (error) { rmSync(dir, { recursive: true, force: true }); throw error; }
   const suffix = `\n\n[Output truncated. Full report: ${reportPath}]`;
   const preview = truncateHead(text, { maxBytes: DEFAULT_MAX_BYTES - Buffer.byteLength(suffix), maxLines: DEFAULT_MAX_LINES - 3 });
-  return { text: preview.content + suffix, reportPath };
+  return { text: preview.content + suffix, reportPath, usage };
 }
 
 export async function runChild(options: ChildOptions): Promise<ChildReport> {
@@ -102,6 +112,7 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
   const lifecycle: { phase: "state" | "prompt" | "running" | "settled" } = { phase: "state" };
   let final: AssistantMessage | undefined;
   let ended = false;
+  let usage: ChildUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
   let startupTimer: NodeJS.Timeout | undefined;
   let exitTimer: NodeJS.Timeout | undefined;
 
@@ -134,6 +145,17 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
     if (message.provider !== options.expected.provider || message.model !== options.expected.model) throw new Error("Child model identity changed");
     if (message.stopReason === "error" || message.stopReason === "aborted") throw new Error(`Child model ${message.stopReason}`);
     final = message;
+    const msgUsage = message.usage;
+    if (msgUsage) {
+      usage.input += msgUsage.input || 0;
+      usage.output += msgUsage.output || 0;
+      usage.cacheRead += msgUsage.cacheRead || 0;
+      usage.cacheWrite += msgUsage.cacheWrite || 0;
+      usage.cost += msgUsage.cost?.total || 0;
+      usage.contextTokens = msgUsage.totalTokens || 0;
+      usage.turns++;
+      options.onUsage?.(usage);
+    }
   };
   const handle = (line: string) => {
     if (!line.trim() || failure) return;
@@ -215,7 +237,7 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
     if (lifecycle.phase !== "settled" || !final) throw new Error("Child exited without final completion");
     const text = final.content.filter(part => part.type === "text").map(part => part.text).join("\n");
     if (!text.trim()) throw new Error("Child final report is empty");
-    return saveReport(redact(text));
+    return saveReport(redact(text), usage);
   } catch (error) {
     throw new Error(`${redact((error as Error).message)}\nPartial file changes may remain; no rollback or retry was performed.`);
   } finally {

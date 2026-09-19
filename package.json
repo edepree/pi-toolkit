@@ -1,6 +1,6 @@
 {
   "name": "pi-toolkit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pi toolkit with Janitor cleanup and blocking serial worker/reviewer delegation.",
   "type": "module",
   "keywords": ["pi-package"],
