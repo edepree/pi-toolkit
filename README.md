@@ -64,7 +64,7 @@ The child uses native **JSON RPC**. Before sending the task on stdin, the runner
 
 For native llama.cpp, configure Pi normally with `LLAMA_BASE_URL` and optional `LLAMA_API_KEY`. The child inherits those variables without putting credentials or the delegated task in command-line arguments. Select an already-loaded model in the parent. This extension does not load/unload router models or implement a custom provider. Child startup still needs Pi to discover that exact model; extension-only provider registrations are not inherited. Native Pi's own built-in llama.cpp integration remains available even when third-party extensions are disabled.
 
-**Live-validation limitation:** The attempted Pi 0.85.1 smoke in an empty disposable agent directory failed before inference with `Unknown provider "llama.cpp"`, despite a reachable router and one loaded model. Native catalog/auth initialization in a cold environment still needs validation. Fixture and package-loader checks below are not proof of live llama.cpp handoff or request ordering.
+**Cold-environment model discovery:** Pi resolves `--provider llama.cpp` from models known at startup. A cold environment with `LLAMA_BASE_URL` set but no stored catalog may report `Unknown provider "llama.cpp"` before any inference. Pi restores its last refreshed llama.cpp catalog from `models-store.json` next to `models.json` in the agent directory without network access, so one normal session (or any catalog refresh) makes the model resolvable for later cold starts. Live validation on Pi 0.85.1/Linux used a disposable agent directory seeded only with that native cache file for an already-loaded model; see the validation notes below.
 
 ## Cancellation, failures, and output
 
@@ -91,7 +91,9 @@ git diff --check
 
 Routine tests use Node test/assert and real fixture processes, not an inference service. They exercise registration/actual execution, flags, trust, fresh-state identity verification, protocol parsing, output bounds, failures, cancellation/escalation, Pi's actual detached bash backend, and subsequent calls. Package tests use Pi's real skill/resource loaders with isolated settings. `check` verifies this package against actual Pi API/RPC types; dependency declaration internals are skipped with `skipLibCheck`.
 
-The package allowlist excludes tests, development plans, local configuration, and workflow logs. A separate packed install/list/resource-loader smoke uses disposable HOME and agent directories, leaving global settings untouched. Real worker/reviewer inference, parent/child request ordering, and real-model cancellation remain a separate validation gate, not a fixture-test claim.
+The package allowlist excludes tests, development plans, local configuration, and workflow logs. A separate packed install/list/resource-loader smoke uses disposable HOME and agent directories, leaving global settings untouched.
+
+**Live product validation (Pi 0.85.1, Linux, native llama.cpp):** In a disposable HOME/agent/project setup whose agent directory was seeded only with the native `models-store.json` cache entry for one already-loaded router model, a real parent Pi process (JSON print mode, toolkit extension loaded, no session, `--tools serial_subagent`) delegated to a real worker child that created the requested file, then to a read-only reviewer child that verified it. A forwarding proxy confirmed the request order `parent → worker → parent → reviewer → parent`, no parent/child inference overlap, exactly the expected per-role tool allowlists, and zero model load/unload/download requests. A second real worker invocation with a long-running bash fixture was cancelled mid-run through the tool's abort path; the fixture process was verified dead via `/proc` before the tool call rejected. Global settings were never modified and no secrets were logged.
 
 ## Attribution and licensing
 

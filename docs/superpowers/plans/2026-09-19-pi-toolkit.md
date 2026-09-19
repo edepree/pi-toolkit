@@ -216,11 +216,11 @@ Add focused red/green tests for each remaining contract: model/provider/thinking
 
 Use peer dependencies for `@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, and `typebox` only when imported; add development TypeScript/Node types only as needed. Generate a reproducible package lock. `npm test` must require no live inference server. Add `npm run check` using `tsc --noEmit` and verify against actual Pi types, not duplicate handwritten interfaces.
 
-- [ ] **Step 5: Complete README and real-Pi validation.**
+- [x] **Step 5: Complete README and real-Pi validation.**
 
   - [x] README documents installation, roles/diff supply, permissions/trust/serialization boundaries, Linux-only support, RPC identity verification, cancellation, output limits, partial edits and validation limitations. Attribution includes Pi example v0.85.1 MIT notice.
   - [x] `npm pack --dry-run`: exactly six intended resources. Native Pi install/list plus actual resource loader from the extracted tarball passed in disposable HOME/agent/project directories: `janitor`, exactly `serial_subagent`, sequential policy, no diagnostics/errors (`task-2-package-smoke.txt`).
-  - [ ] Live inference/order/cancellation: router reachable with an already-loaded model, but initial disposable parent CLI failed before inference with `Unknown provider "llama.cpp"`; zero proxy requests. Cold native catalog/auth initialization needs diagnosis. Parent directed a clean commit/stop and follow-up workflow under another approved model. No live handoff success is claimed.
+  - [x] Live inference/order/cancellation on Pi 0.85.1/Linux with the native llama.cpp provider and the already-loaded model: disposable agent directory seeded only with the native `models-store.json` catalog cache (cold-start resolution restored from Pi's own store; earlier cold run had failed before inference with `Unknown provider "llama.cpp"`, log retained). Real parent Pi delegated worker then reviewer children; forwarding proxy traced `parent → worker → parent → reviewer → parent`, max 1 concurrent inference, exact per-role tool allowlists, zero model-management requests; mid-run cancellation of a long bash fixture verified the fixture process dead via `/proc` and the call rejected. Global settings untouched; no secrets logged (`task-2-live-smoke-seeded.txt`).
 
 Document:
 
@@ -240,7 +240,7 @@ If `LLAMA_BASE_URL` is reachable and a model is already loaded, perform a dispos
 
 - [ ] **Step 6: Commit, task review, final branch review.**
 
-Implementation is stopping at a verified scoped commit by parent instruction. Commit range, exact red/green logs, and task/full-branch `git diff -U10` artifacts are recorded in the ignored SDD ledger and managed output report. Independent task review, live integration and final branch review remain follow-up gates; this checkbox is intentionally not marked complete.
+Implementation and live validation are complete and committed. Commit range, exact red/green logs, live smoke evidence, and task/full-branch `git diff -U10` artifacts are recorded in the ignored SDD ledger and managed output report. Independent task review and final branch review remain reviewer-stage gates; this checkbox is intentionally not marked complete.
 
 Commit verified source/tests/docs and prepare the task diff in the ignored SDD workspace. Return exact commands/results, live-smoke evidence or limitations, commits, risks, and any deviations. A fresh reviewer checks correctness and spec coverage; fix concrete findings with regression tests and re-review the fix range. The parent runs the final full suite and pack check before reporting completion. Do not merge, push, or publish.
 
