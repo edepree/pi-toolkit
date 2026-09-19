@@ -144,6 +144,8 @@ export interface ChildOptions {
   command: string;
   args: string[];
   cwd: string;
+  prompt: string;
+  expected: { provider: string; model: string; thinkingLevel: NonNullable<ExtensionContext["thinkingLevel"]> };
   signal?: AbortSignal;
   onProgress?: (text: string) => void;
 }
@@ -157,7 +159,9 @@ export function runChild(options: ChildOptions): Promise<ChildReport>;
 
 These are internal implementation seams, not new user-configurable options. Keep credentials out of results. The extension owns prompt preparation and role/model/cwd argument construction; the runner owns subprocess lifetime and JSON parsing.
 
-- [ ] **Step 1: Write failing registration and process tests.**
+- [x] **Step 1: Write failing registration and process tests.**
+
+Evidence: `task-2-red.txt` records 29 explicit missing-extension/runner failures. `task-2-package-red.txt` records the missing manifest resource. `task-2-protocol-red.txt` records malformed numeric assistant text being wrongly accepted before the regression fix.
 
 Capture a registered tool using a minimal fake `ExtensionAPI` boundary, then invoke its real `execute` method where practical. Use real `process.execPath` child fixtures for runner tests, rather than mocking `spawn`. Start by asserting the extension file exists, so the initial red signal is explicit. Add tests before implementing each behavior.
 
@@ -174,7 +178,9 @@ Fixture processes emit Pi-shaped JSON events, including separate `message_end` a
 
 Run `node --test tests/serial-subagent.test.ts`; record failures before adding implementation.
 
-- [ ] **Step 2: Implement launch and role restrictions.**
+- [x] **Step 2: Implement launch and role restrictions.**
+
+Evidence: final `npm test` passes both role allowlists, explicit model/thinking/cwd/env/trust flags, no history/extensions, exact RPC identity-before-prompt rejection, schema/runtime validation, overlap, setup cleanup and pre-abort. Actual Pi API typecheck passes.
 
 Register this schema and execution policy:
 
@@ -186,27 +192,35 @@ parameters: Type.Object({
 executionMode: "sequential",
 ```
 
-Also validate trimmed task and role inside execution, before spawning. Resolve the running Pi executable without assuming `process.argv[1]` is always Pi (SDK hosts and tests differ). Pass arguments as an array with `shell: false`; never interpolate the task into a shell command. Use fresh JSON/print/no-session mode, disabled extensions/templates, explicit role tool list, explicit provider/model/thinking, and the parent's trust decision using verified CLI flags. Do not place secrets in arguments or report text.
+Also validate trimmed task and role inside execution, before spawning. Resolve the running Pi executable without assuming `process.argv[1]` is always Pi (SDK hosts and tests differ). Pass arguments as an array with `shell: false`; never interpolate the task into a shell command. Use fresh JSON RPC/no-session mode, verify exact provider/model/thinking and fresh idle state via `get_state` before sending task on stdin, disabled extensions/templates, explicit role tool list, explicit provider/model/thinking, and the parent's trust decision using verified CLI flags. Do not place secrets in arguments or report text.
 
 Write short worker/reviewer role prompts matching the spec. Add tool guidance telling the parent to pass a self-contained task and delegate review only after the worker returns. Do not copy parent conversation or runtime system prompts.
 
 Keep a busy guard across setup, spawn, completion, and cleanup. Session shutdown and the tool AbortSignal must share one cancellation path. Pre-aborted calls must not launch any process.
 
-- [ ] **Step 3: Implement lifecycle and output parsing.**
+- [x] **Step 3: Implement lifecycle and output parsing.**
 
-Use a fresh subprocess per invocation with inherited environment. On POSIX, isolate the process group and terminate the group on cancellation/shutdown, escalating to SIGKILL after a bounded grace period; wait for actual exit rather than checking `proc.killed`. Verify Pi's bash process-tree behavior so grandchildren are not left running. On unsupported platforms, fail explicitly before launch rather than silently weakening cancellation; document the tested platform.
+Evidence: real Node fixture processes cover exit-after-final failure, split UTF-8, malformed/oversized/invalid records, model errors/abort, missing/intermediate/tool-only final output, private readable truncation artifacts, cancellation/escalation and actual Pi detached bash descendants. Shutdown-only and subsequent-call recovery tests pass.
 
-Parse newline-delimited JSON incrementally with UTF-8-safe handling. Bound incomplete records and stderr; reject oversized/malformed protocol records with diagnostics rather than unbounded allocation. Track only final assistant/completion information, not the entire transcript. Distinguish model error/abort and missing or invalid completion from success. Require successful child exit and a genuine final report; handle signal termination and spawn errors.
+Use a fresh subprocess per invocation with inherited environment. On Linux, isolate the process group and terminate the group on cancellation/shutdown, escalating to SIGKILL after a bounded grace period; wait for actual exit rather than checking `proc.killed`. Verify Pi's bash process-tree behavior so grandchildren are not left running. On unsupported platforms, fail explicitly before launch rather than silently weakening cancellation; document the tested platform.
+
+Use native RPC with a pre-prompt `get_state` identity handshake; require `agent_settled`, EOF and exit 0. Parse newline-delimited JSON incrementally with UTF-8-safe handling. Bound incomplete records and stderr; reject oversized/malformed protocol records with diagnostics rather than unbounded allocation. Track only final assistant/completion information, not the entire transcript. Distinguish model error/abort and missing or invalid completion from success. Require successful child exit and a genuine final report; handle signal termination and spawn errors.
 
 Forward bounded progress via `onUpdate` only. Save oversized final reports privately and truncate using Pi helpers, with explicit full-report paths. Cleanup listeners, timers, and temporary prompts in `finally`; leave saved report artifacts available to the caller. Do not retry failed launches or roll back partial edits.
 
-- [ ] **Step 4: Exercise the full behavior matrix and typecheck.**
+- [x] **Step 4: Exercise the full behavior matrix and typecheck.**
+
+Evidence: final `npm test` has 36 passed / 0 failed / 0 skipped; `npm run check` and `git diff --check` exit 0. Actual Pi types are imported, not duplicated. Pinned peer/development dependencies and package lock installed successfully. See `task-2-final-verification.txt`.
 
 Add focused red/green tests for each remaining contract: model/provider/thinking/cwd/env inheritance, trust, tool allowlists, no extensions/history, overlapping invocation, split UTF-8/JSON records, error exits, model errors, missing final output, malformed/oversized records, output truncation with readable full report, pre-abort, mid-run abort, termination escalation, shutdown, descendant cleanup, and subsequent calls after failure/cancellation.
 
 Use peer dependencies for `@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, and `typebox` only when imported; add development TypeScript/Node types only as needed. Generate a reproducible package lock. `npm test` must require no live inference server. Add `npm run check` using `tsc --noEmit` and verify against actual Pi types, not duplicate handwritten interfaces.
 
 - [ ] **Step 5: Complete README and real-Pi validation.**
+
+  - [x] README documents installation, roles/diff supply, permissions/trust/serialization boundaries, Linux-only support, RPC identity verification, cancellation, output limits, partial edits and validation limitations. Attribution includes Pi example v0.85.1 MIT notice.
+  - [x] `npm pack --dry-run`: exactly six intended resources. Native Pi install/list plus actual resource loader from the extracted tarball passed in disposable HOME/agent/project directories: `janitor`, exactly `serial_subagent`, sequential policy, no diagnostics/errors (`task-2-package-smoke.txt`).
+  - [ ] Live inference/order/cancellation: router reachable with an already-loaded model, but initial disposable parent CLI failed before inference with `Unknown provider "llama.cpp"`; zero proxy requests. Cold native catalog/auth initialization needs diagnosis. Parent directed a clean commit/stop and follow-up workflow under another approved model. No live handoff success is claimed.
 
 Document:
 
@@ -226,6 +240,8 @@ If `LLAMA_BASE_URL` is reachable and a model is already loaded, perform a dispos
 
 - [ ] **Step 6: Commit, task review, final branch review.**
 
+Implementation is stopping at a verified scoped commit by parent instruction. Commit range, exact red/green logs, and task/full-branch `git diff -U10` artifacts are recorded in the ignored SDD ledger and managed output report. Independent task review, live integration and final branch review remain follow-up gates; this checkbox is intentionally not marked complete.
+
 Commit verified source/tests/docs and prepare the task diff in the ignored SDD workspace. Return exact commands/results, live-smoke evidence or limitations, commits, risks, and any deviations. A fresh reviewer checks correctness and spec coverage; fix concrete findings with regression tests and re-review the fix range. The parent runs the final full suite and pack check before reporting completion. Do not merge, push, or publish.
 
 ## Plan self-review
@@ -238,3 +254,8 @@ Commit verified source/tests/docs and prepare the task diff in the ignored SDD w
 | Spec lifecycle/security | Task 2 steps 2–4 cover blocking, trust, allowlists, cancellation, errors, bounds, no hidden fallback. |
 | Spec Janitor/attribution | Task 1 covers upstream adaptation, behavior checks, source and license preservation. |
 | Spec deployment/limitations | Task 2 step 5 covers installable resources, native llama.cpp, minimum version and explicit unsupported validation. |
+
+## Task 2 approved integration rulings
+
+- Linux-only V1 with `/proc` PID/start-time ownership checks: detached Pi bash groups need more than killing the Pi group. Other platforms fail before launch. Node-installed Pi 0.85.1 is the tested executable distribution.
+- Use native JSON RPC instead of JSON/print solely to check exact provider/model/thinking with `get_state` before any prompt/inference. Require fresh idle state; send prepared task on stdin, await `agent_settled`, then close stdin and await exit 0. The CLI has fuzzy selection and no exact-only flag. The internal runner seam adds `prompt`/`expected`; no user-facing options. Role prompts are fixed literal arguments; no prompt temporary files are needed.

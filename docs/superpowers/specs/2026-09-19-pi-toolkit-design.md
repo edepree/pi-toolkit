@@ -39,7 +39,7 @@ One model-callable tool:
 serial_subagent({ agent: "worker" | "reviewer", task: "..." })
 ```
 
-Both fields are required. Reject unknown roles and empty/whitespace-only tasks before launch. The task is a self-contained delegation brief: objectives, relevant paths, constraints, and completion criteria. The parent must include relevant prior results explicitly; no conversation history is copied implicitly.
+Both fields are required. Reject unknown roles and empty/whitespace-only tasks before launch. The task is a self-contained delegation brief: objectives, relevant paths, constraints, and completion criteria. The task is sent on stdin only after startup identity verification. The parent must include relevant prior results explicitly; no conversation history is copied implicitly.
 
 ### Fixed roles
 
@@ -58,10 +58,11 @@ Use a blocking subprocess adapted from Pi's subagent example rather than an in-p
 
 1. Validate arguments and require an active parent model.
 2. Run the tool in Pi's native sequential execution mode so sibling parent tools cannot overlap it. Maintain a defensive busy guard; reject unexpected concurrent entry rather than build a queue.
-3. Launch a fresh, nonpersistent Pi session in JSON/print mode using the parent's working directory, selected provider/model, thinking level, and inherited environment. Do not resume or fork the parent session.
+3. Launch a fresh, nonpersistent Pi session in native JSON RPC mode using the parent's working directory, selected provider/model, thinking level, and inherited environment. Do not resume or fork the parent session.
+   Verify the child’s exact provider/model/thinking and fresh idle state through RPC `get_state` **before** sending the task. The CLI alone permits fuzzy model matching; a mismatch must fail before inference.
 4. Inherit `LLAMA_BASE_URL` and `LLAMA_API_KEY` without logging their values. Use the selected native provider/model explicitly; fail rather than silently choose another model. Do not load or unload models on the router.
 5. Disable child extensions and prompt templates. Retain normal Pi project instructions and skill discovery subject to Pi's trust rules. Provide a short role prompt and the delegated task, with the role's explicit built-in tool allowlist.
-6. Await completion and process exit. Child progress can update the tool UI, but must not inject messages that trigger parent inference.
+6. Await `agent_settled` (not just `agent_end`), close RPC input, and await successful process exit. Child progress can update the tool UI, but must not inject messages that trigger parent inference.
 7. Return the final child report as the tool result. Keep child intermediate conversation out of the parent model context. Release the busy guard only after cleanup.
 
 The normal review sequence is explicit:
@@ -74,8 +75,9 @@ Each arrow into a child creates a new conversation. There is no automatic review
 
 ## Lifecycle, failures, and output
 
+- V1 supports Linux with readable `/proc` and Node-installed Pi only; fail before launch elsewhere. Pi’s detached bash groups require descendant identity tracking in addition to the Pi process group.
 - Cancellation and session shutdown must stop the child and its active tool subprocesses, escalate termination if necessary, and wait for termination before allowing another launch. Do not rely on a signal having been sent as proof of process exit.
-- Remove abort listeners, timers, and temporary prompt resources on every exit path.
+- Remove abort listeners, timers, and any temporary prompt resources on every exit path.
 - Report launch failures, invalid/missing completion output, process failures, model errors, and cancellation explicitly. Do not treat earlier progress text as a successful final report.
 - Do not silently retry a delegated task or switch execution modes after a launch/setup failure. Preserve any partial file changes and report that they may exist; no automatic rollback.
 - Bound progress, error diagnostics, and model-visible final output using Pi's truncation helpers. Use at most Pi's standard 50 KiB/2,000-line output limit, indicate truncation, and provide a file reference for full oversized reports. Stream parsing must not accumulate the entire child transcript in memory.
@@ -119,3 +121,7 @@ No parallel/background mode, endpoint-wide scheduler, task queue, named-agent co
 - [Pi llama.cpp provider](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/llama-cpp.md)
 - [Pi subagent example](https://github.com/earendil-works/pi/tree/main/packages/coding-agent/examples/extensions/subagent)
 - [Universal Janitor source](https://github.com/github/awesome-copilot/blob/main/agents/janitor.agent.md)
+
+## Implementation rulings (2026-09-19)
+
+Approved during Task 2: Linux-only cancellation support because Pi bash uses detached groups; unsupported platforms fail before launch. Native RPC replaces JSON/print solely to verify exact model/provider/thinking before inference (Pi CLI has fuzzy matching). No scheduling or SDK-session architecture was added.
