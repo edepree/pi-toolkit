@@ -57,7 +57,9 @@ Do not add abstractions beyond these responsibilities. If the runner is short en
 
 **Interfaces:** Produces `pi.skills = ["./skills"]`; Task 2 adds the extension entry. The skill name is exactly `janitor`, and it is independent of the extension's two roles.
 
-- [ ] **Step 1: Capture a behavior baseline before writing the skill.**
+- [x] **Step 1: Capture a behavior baseline before writing the skill.**
+
+Evidence: the saved pre-skill response preserved public/runtime consumers, auth and permission tests, and unrelated edits. No baseline safety failure or behavioral improvement was demonstrated.
 
 The parent runs a fresh-context cleanup scenario without the skill, using this brief:
 
@@ -72,7 +74,9 @@ what do you inspect, and how do you verify? Explain any blockers briefly.
 
 Preserve the observed response in the workflow artifact. Do not fabricate baseline failures. If the baseline already behaves safely, retain the requested upstream adaptation and report that no improvement was demonstrated on that scenario.
 
-- [ ] **Step 2: Write a failing package/skill test.**
+- [x] **Step 2: Write a failing package/skill test.**
+
+Evidence: `node --test tests/package.test.ts` first failed with the explicit `package manifest is missing` assertion; the subsequent discovery test failed with `Janitor skill is missing`. Both red outputs are preserved in the ignored Task 1 evidence workspace.
 
 Use Node's built-in test runner. First make missing resources fail via an explicit assertion, not a module-resolution accident:
 
@@ -92,7 +96,9 @@ test("package declares the Janitor skill", () => {
 
 Run `node --test tests/package.test.ts` and record the expected missing-manifest assertion.
 
-- [ ] **Step 3: Create the minimal package and adapt the skill.**
+- [x] **Step 3: Create the minimal package and adapt the skill.**
+
+Evidence: commit `834de09` supplies the manifest/lock, adapted skill, notices, README, and tests. The upstream source and license are pinned to `4f4796f0bf30e105700f97ed8408c12b6aa95e06`.
 
 Use this initial manifest contract (add appropriate version/description/repository/files fields):
 
@@ -113,11 +119,17 @@ Fetch/read the actual Janitor source and its LICENSE. Adapt the content to the a
 
 - [ ] **Step 4: Validate discovery and behavior.**
 
+  - [x] Package/skill tests: 2 passed, 0 failed, 0 skipped against Pi 0.85.1; `npm ci`, `npm test`, `npm pack --dry-run`, and `git diff --check` passed. The tarball contains only the four intended package resources.
+  - [x] Native Pi install/list and actual resource-loader smoke passed using the extracted tarball and disposable settings: exactly `janitor`, no diagnostics, intact upstream notice. Pi intentionally saves local package paths relative to its settings directory; the harness verifies the resolved target.
+  - [ ] Same-scenario WITH-skill behavioral comparison: assigned to the subsequent reviewer stage. Discovery does not prove compliance; the safe baseline is retained without a fabricated failure.
+
 Extend the test to load the skill through Pi's actual skill loader when peer dependencies are installed; assert no discovery warnings and the correct name. Do not use sentence-match tests as proof the agent follows the skill. The parent repeats the same baseline scenario with the skill loaded, then compares the actual responses. Document limitations honestly.
 
 Run `node --test tests/package.test.ts`, `npm pack --dry-run`, and `git diff --check`. Review the tarball list for accidental logs or local configuration.
 
-- [ ] **Step 5: Commit and prepare review evidence.**
+- [x] **Step 5: Commit and prepare review evidence.**
+
+Evidence: implementation commit `834de09`; red/green, install, pack, and smoke logs are preserved under `.superpowers/sdd/2026-09-19-pi-toolkit/`. `task-1-review.patch` contains the starting-HEAD-to-task-HEAD diff with 10 context lines and a commit-range header. Independent review remains pending.
 
 Commit only this task's deliverable. Return commit ids, changed files, red/green commands/results, behavioral evidence limitations, and exact attribution sources. Generate a task diff into the plan's ignored SDD workspace for the reviewer. Do not include generated workflow state in the commit.
 
