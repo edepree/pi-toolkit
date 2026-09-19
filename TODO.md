@@ -8,8 +8,8 @@
 - [x] Review specification for completeness, consistency, scope, and ambiguity.
 - [x] Obtain user review of the written specification.
 - [x] Create implementation plan after approval: docs/superpowers/plans/2026-09-19-pi-toolkit.md.
-- [ ] Task 1: package and Janitor skill, including validation and independent review.
-- [ ] Task 2: serial worker/reviewer extension, tests, usage docs, and independent review.
-- [ ] Final branch review and fresh verification; report integration options.
+- [x] Task 1: package and Janitor skill, including validation and independent review.
+- [x] Task 2: serial worker/reviewer extension, tests, usage docs, and independent review.
+- [x] Final branch review and fresh verification; report integration options.
 
 Visual companion: not needed for this nonvisual design.
