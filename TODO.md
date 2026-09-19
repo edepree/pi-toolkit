@@ -6,7 +6,10 @@
 - [x] Present and approve package, skill, and extension design (worker plus read-only reviewer).
 - [x] Write the approved design specification: docs/superpowers/specs/2026-09-19-pi-toolkit-design.md.
 - [x] Review specification for completeness, consistency, scope, and ambiguity.
-- [ ] Obtain user review of the written specification.
-- [ ] Create implementation plan after approval.
+- [x] Obtain user review of the written specification.
+- [x] Create implementation plan after approval: docs/superpowers/plans/2026-09-19-pi-toolkit.md.
+- [ ] Task 1: package and Janitor skill, including validation and independent review.
+- [ ] Task 2: serial worker/reviewer extension, tests, usage docs, and independent review.
+- [ ] Final branch review and fresh verification; report integration options.
 
 Visual companion: not needed for this nonvisual design.
