@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { parseFrontmatter, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 const fixture = resolve("tests/fixtures/child.mjs");
 const expected = { provider: "fixture", model: "exact-model", thinkingLevel: "off" as const };
@@ -51,6 +51,11 @@ test("extension registers one sequential tool and rejects invalid calls before l
   assert.equal(tool.name, "serial_subagent");
   assert.equal(tool.executionMode, "sequential");
   assert.deepEqual((tool.parameters as { required?: string[] }).required, ["agent", "task"]);
+  for (const name of ["worker", "reviewer"]) {
+    const { frontmatter } = parseFrontmatter<{ description: string }>(readFileSync(`agents/${name}.md`, "utf8"));
+    assert.ok(tool.description.includes(`${name}: ${frontmatter.description}`));
+    assert.ok(tool.promptGuidelines!.some(line => line.includes(`${name}: ${frontmatter.description}`)));
+  }
   await assert.rejects(() => tool.execute("bad", { agent: "worker", task: " \n" }, undefined, undefined, ctx), /task/i);
   await assert.rejects(() => tool.execute("no-model", { agent: "worker", task: "x" }, undefined, undefined, { ...ctx, model: undefined }), /model/i);
   assert.ok(!existsSync(join(cwd, "started")));
@@ -127,7 +132,7 @@ test("progress and stderr are bounded and credential values are not returned", a
   const activity = updates.at(-1)!.activity;
   assert.deepEqual(activity.slice(0, 2), ["intermediate", "→ bash echo [redacted] && ls"]);
   assert.ok(activity.every(line => line.length <= 120 && !line.includes("fixture-secret-do-not-return")));
-  // Two assistant messages: usage must not be double-counted from agent_end.
+  // Two assistant messages; agent_end must not count usage again.
   assert.deepEqual(updates.at(-1)!.usage, { input: 2, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 2, turns: 2 });
   assert.ok(!report.text.includes("fixture-secret-do-not-return"));
   await assert.rejects(runChild(options("stderr", temporary(t))), (error: Error) => {
@@ -168,6 +173,7 @@ for (const agent of ["worker", "reviewer"]) {
       const value = (flag: string) => args[args.indexOf(flag) + 1];
       assert.equal(value("--mode"), "rpc");
       assert.equal(value("--tools"), agent === "worker" ? "read,bash,edit,write,grep,find,ls" : "read,grep,find,ls");
+      assert.match(value("--append-system-prompt"), agent === "worker" ? /^You are the worker .*do not claim rollback\.$/ : /^You are the read-only reviewer .*disclose credentials\.$/);
       assert.equal(value("--provider"), "fixture");
       assert.equal(value("--model"), "exact-model");
       assert.equal(value("--thinking"), "off");

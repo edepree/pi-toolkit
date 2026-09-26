@@ -65,10 +65,12 @@ Changes from upstream:
 ## Pi subagent example
 
 `extensions/serial-subagent.ts` and `lib/run-child.ts` adapt the subprocess-delegation
-approach of Pi's subagent example, with new fixed roles, sequential execution,
-pre-inference RPC identity verification, bounded parsing/reporting, and Linux
-process-tree cleanup. They do not include the example's agent discovery,
-parallel/chain scheduler, or message-history rendering.
+approach of Pi's subagent example. Changes: agents are loaded only from the
+package's `agents/` directory, calls run one at a time, the child's model is
+verified over RPC before the task is sent, output parsing and reports are
+size-limited, and the child's process tree is cleaned up on Linux. They do not
+include the example's user/project agent discovery, parallel/chain scheduler,
+or message-history rendering.
 
 - Source: [`packages/coding-agent/examples/extensions/subagent/index.ts`](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/examples/extensions/subagent/index.ts)
 - Reference version: installed `@earendil-works/pi-coding-agent` **0.85.1**

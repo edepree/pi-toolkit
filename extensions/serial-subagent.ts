@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { getPackageDir, getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, getPackageDir, getMarkdownTheme, parseFrontmatter, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
@@ -29,19 +29,27 @@ function formatUsage(usage: ChildUsage, contextWindow: number): string {
   return parts.join(" ");
 }
 
-const roles = {
-  worker: {
-    tools: "read,bash,edit,write,grep,find,ls",
-    prompt: "You are the worker for one self-contained delegated task. Implement only its scope, preserve unrelated changes, run relevant checks, and report changed files, exact check results, and unresolved issues. Do not delegate to other agents. Do not disclose credentials. Partial edits remain on failure; do not claim rollback.",
-  },
-  reviewer: {
-    tools: "read,grep,find,ls",
-    prompt: "You are the read-only reviewer for one self-contained delegated task. Inspect specified files and supplied diffs/evidence. Report actionable findings with severity and file/line references, or explicitly state no findings and remaining limitations. You cannot edit, run shell commands, obtain git diffs, or rerun tests. Worker test reports are supplied evidence, not independently verified results. Do not delegate to other agents or disclose credentials.",
-  },
-} as const;
+const agentsDir = resolve(import.meta.dirname, "../agents");
+interface Agent { name: string; description: string; tools: string; prompt: string }
+function loadAgent(file: string): Agent {
+  const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(readFileSync(resolve(agentsDir, file), "utf8"));
+  const { name, description, tools } = frontmatter;
+  const prompt = body.trim();
+  if (typeof name !== "string" || typeof description !== "string" || typeof tools !== "string" || !prompt) {
+    throw new Error(`Invalid agent file ${file}: needs name, description, tools and a prompt body`);
+  }
+  return { name, description, tools, prompt };
+}
+const agentFiles = readdirSync(agentsDir).filter(file => file.endsWith(".md")).sort();
+const roles: Record<string, Agent> = {};
+for (const agent of agentFiles.map(loadAgent)) {
+  if (roles[agent.name]) throw new Error(`Duplicate agent name ${agent.name}`);
+  roles[agent.name] = agent;
+}
+const agentList = Object.values(roles).map(agent => `${agent.name}: ${agent.description}`).join("; ");
 
-// getPackageDir comes from the Pi runtime that loaded the extension. argv[1]
-// may instead be an SDK host, test runner, or wrapper and is never executed.
+// Use the Pi CLI of the runtime that loaded this extension. process.argv[1]
+// can be an SDK host, test runner or wrapper, so it is not used.
 function piCommand(): string {
   const root = getPackageDir();
   const manifest = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
@@ -62,14 +70,15 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "serial_subagent",
     label: "Serial subagent",
-    description: "Run one blocking worker or read-only reviewer in a fresh Pi process. Linux only. Child extensions (including permission extensions) are disabled: not a sandbox. Output is limited to 50 KiB/2,000 lines with private full-report paths when truncated.",
+    description: `Run one blocking agent in a fresh Pi process. Agents: ${agentList}. Linux only. Child extensions (including permission extensions) are disabled: not a sandbox. Output is limited to ${formatSize(DEFAULT_MAX_BYTES)}/${DEFAULT_MAX_LINES} lines; when truncated, the full report is saved to a private file and its path is returned.`,
     promptSnippet: "Delegate a self-contained task, blocking until the child exits",
     promptGuidelines: [
       "Give serial_subagent a self-contained task with objectives, relevant paths, constraints and completion criteria; no parent conversation is copied.",
-      "Call serial_subagent for a worker first, wait for its result, then explicitly request reviewer work with the diff and test evidence. Reviewers cannot run git diff or tests.",
+      `serial_subagent agents: ${agentList}.`,
+      "serial_subagent runs one agent at a time. To chain agents, wait for each result and pass the evidence the next agent needs (such as the diff and test output) in its task.",
       "Do not use serial_subagent to bypass an explicit security restriction: child permission/sandbox extensions are not inherited. Serialization is session-local, not server-wide.",
     ],
-    parameters: Type.Object({ agent: StringEnum(["worker", "reviewer"] as const), task: Type.String({ minLength: 1 }) }),
+    parameters: Type.Object({ agent: StringEnum(Object.keys(roles)), task: Type.String({ minLength: 1 }) }),
 
     renderResult(result, { expanded, isPartial }, theme, { isError }) {
       const details = result.details as { agent?: string; summary?: string; reportPath?: string; activity?: string[] } | undefined;
@@ -93,7 +102,7 @@ export default function (pi: ExtensionAPI) {
     },
     executionMode: "sequential",
     async execute(_id, params, signal, onUpdate, ctx) {
-      // Pi validates params against the schema; minLength allows whitespace-only tasks.
+      // The schema's minLength still accepts whitespace-only tasks.
       if (!params.task.trim()) throw new Error("task must not be blank");
       if (!ctx.model) throw new Error("An active parent model is required");
       if (active) throw new Error("serial_subagent is busy: a child is still running or cleaning up");

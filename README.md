@@ -31,30 +31,27 @@ By default it refines only uncommitted changes, following the project's own conv
 
 ## serial_subagent
 
-The parent model calls the tool with `agent` (`worker` or `reviewer`) and a self-contained `task` covering objectives, paths, constraints and completion criteria. No conversation history is copied.
+The parent model calls the tool with an `agent` name and a self-contained `task` covering objectives, paths, constraints and completion criteria. No conversation history is copied.
 
-| Role | Tools |
-| --- | --- |
-| Worker | `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls` |
-| Reviewer | `read`, `grep`, `find`, `ls` |
+Agents are defined in [`agents/`](agents): [`worker`](agents/worker.md) edits files and runs checks, and [`reviewer`](agents/reviewer.md) is read-only. Each file's frontmatter sets `name` (the `agent` value), `description` (shown to the parent model) and `tools` (the child's tool allowlist). The body is appended to the child's system prompt. Adding a file adds an agent.
 
-Flow: `parent → worker → parent → reviewer → parent`. The reviewer can't run `git diff` or tests, so put the diff (or a saved patch path) and the worker's test output in the review task.
+Typical flow: `parent → worker → parent → reviewer → parent`. The reviewer can't run `git diff` or tests, so include the diff (or a saved patch path) and the worker's test output in the review task.
 
 Behavior:
 
 - Each call starts a fresh `pi --mode rpc --no-session --no-extensions` child in the parent's cwd, with the parent's provider, model, thinking level, environment and project trust.
 - The task is sent over stdin only after `get_state` confirms the exact model and a fresh session. A mismatch fails before any inference.
-- Cancellation or session shutdown sends SIGTERM to the child's process group, waits 500 ms, then sends SIGKILL to any remaining descendants. The slot stays busy until they're dead.
-- Startup has a 30 s deadline. There's no task timeout; cancel it yourself if needed.
-- Failures are explicit. **Partial edits remain**: there's no rollback or retry.
-- While running, the tool row shows ⏳, live usage, and the child's last 5 tool calls/notes (redacted, one line each). Only the final assistant report is returned. If it exceeds 50 KiB or 2,000 lines, it's truncated and the full report is saved to a private temp file (the path is in the result).
-- Known credential env values are redacted from output.
+- Cancellation or session shutdown sends SIGTERM to the child's process group, waits briefly, then sends SIGKILL to any remaining descendants. Another call can't start until they have exited.
+- Startup has a timeout. The task itself has none; cancel it if needed.
+- Failures return an error. **Partial edits remain**: there's no rollback or retry.
+- While running, the tool row shows ⏳, token usage, and the child's latest tool calls and notes (redacted, one line each). Only the final assistant report is returned. If it exceeds Pi's default tool output limit, it's truncated and the full report is saved to a private temp file whose path is in the result.
+- Values of environment variables that look like credentials are redacted from output.
 
-For native llama.cpp, set `LLAMA_BASE_URL` (and optionally `LLAMA_API_KEY`) as usual; the child inherits them. The child can only resolve models Pi knows at startup, so a cold agent directory may need one normal session to populate `models-store.json` first.
+For llama.cpp, set `LLAMA_BASE_URL` (and optionally `LLAMA_API_KEY`); the child inherits them. The child only sees models Pi knows at startup, so a new Pi agent directory may need one normal session to populate `models-store.json` first.
 
 ## Development
 
-Tested on Pi 0.85.1 and Node 26 (Node 22.19+ required for TypeScript type stripping). There's no build step.
+Tested with the Pi version in `package.json` `devDependencies` and Node 26. Node 22.19+ is required to run TypeScript without a build step.
 
 ```bash
 npm ci --ignore-scripts && npm test && npm run check

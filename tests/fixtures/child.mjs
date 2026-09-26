@@ -10,7 +10,7 @@ const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2
 const message = (text, stopReason = "stop") => ({ role: "assistant", content: [{ type: "text", text }], api: "openai-completions", provider: "fixture", model: "exact-model", usage, stopReason, timestamp: Date.now() });
 const send = (event) => process.stdout.write(JSON.stringify(event) + "\n");
 const response = (command, data) => send({ type: "response", id: command.id, command: command.type, success: true, ...(data && { data }) });
-const input = createInterface({ input: process.stdin }); // Fixture commands contain escaped newlines only.
+const input = createInterface({ input: process.stdin }); // JSON escapes newlines, so each line is one command.
 input.on("close", async () => {
   writeFileSync("stdin-ended", "");
   if (mode === "wait-exit") while (!existsSync("release")) await delay(10);
@@ -71,7 +71,7 @@ input.on("line", async line => {
   }
   if (mode === "intermediate-only") process.exit(0);
   send({ type: "agent_end", messages: mode === "missing" ? [] : [final] });
-  // Distinct settled event is essential: agent_end alone is not completion.
+  // The runner treats agent_settled, not agent_end, as completion.
   await delay(1);
   send({ type: "agent_settled" });
 });

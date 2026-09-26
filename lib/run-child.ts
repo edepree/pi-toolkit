@@ -14,13 +14,13 @@ export interface ChildOptions {
   command: string;
   args: string[];
   cwd: string;
-  // RPC verifies identity before sending the prepared task, never via argv.
+  // Sent over RPC after the child's model is verified; never passed in argv.
   prompt: string;
   expected: { provider: string; model: string; thinkingLevel: NonNullable<ExtensionContext["thinkingLevel"]> };
   signal?: AbortSignal;
   onProgress?: (progress: ChildProgress) => void;
 }
-// activity: last few redacted one-line notes (tool calls, assistant text).
+// activity: the latest redacted one-line notes (tool calls, assistant text).
 export interface ChildProgress { usage: ChildUsage; activity: string[] }
 export interface ChildUsage {
   input: number;
@@ -52,8 +52,9 @@ function stillLive(identity: ProcessIdentity) {
   const current = processIdentity(identity.pid);
   return current?.start === identity.start && current.state !== "Z" && current.state !== "X";
 }
-// Pi's bash tools use their own detached groups. Snapshot descendants before
-// SIGTERM reparents them; retain start times so escalation cannot target reused PIDs.
+// Pi's bash tool runs commands in their own detached process groups. Record
+// descendants before SIGTERM reparents them, and keep their start times so
+// SIGKILL cannot hit a reused PID.
 function discoverDescendants(owned: Map<number, ProcessIdentity>) {
   const processes = readdirSync("/proc").filter(name => /^\d+$/.test(name)).map(name => processIdentity(Number(name))).filter(p => p !== undefined);
   let changed = true;
@@ -98,7 +99,6 @@ function saveReport(text: string, usage: ChildUsage): ChildReport {
 export async function runChild(options: ChildOptions): Promise<ChildReport> {
   if (process.platform !== "linux") throw new Error("serial_subagent requires Linux /proc for child lifecycle cleanup");
   if (options.signal?.aborted) throw new Error("Child cancelled before launch");
-  // Fail before launch if the process identity facility is unavailable.
   if (!processIdentity(process.pid)) throw new Error("Linux /proc is unavailable");
   const redact = redactor();
   const proc = spawn(options.command, options.args, { cwd: options.cwd, env: process.env, shell: false, detached: true, stdio: ["pipe", "pipe", "pipe"] });
@@ -122,21 +122,21 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
     if (stopping) return;
     stopping = (async () => {
       discoverDescendants(owned);
-      // Give native Pi shutdown first opportunity to kill its detached bash work.
+      // SIGTERM first so Pi can stop its own detached bash processes.
       if (root) signalOwned(root, "SIGTERM", true);
       const deadline = Date.now() + TERMINATION_GRACE_MS;
       while ([...owned.values()].some(stillLive)) {
         discoverDescendants(owned);
         if (Date.now() >= deadline) {
           for (const identity of owned.values()) {
-            // Group leaders are owned; never signal a parent's/shared group.
+            // Signal a whole group only when we own its leader, never a parent or shared group.
             signalOwned(identity, "SIGKILL", identity.group === identity.pid);
           }
         }
         await delay(20);
       }
     })();
-    // Preserve cleanup failures until finally awaits them, without unhandled rejection.
+    // The try block awaits this later; the catch prevents an unhandled rejection before then.
     void stopping.catch(() => {});
   };
   const fail = (message: string) => { failure ??= message; stop(); };
@@ -148,7 +148,7 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
     if (message.stopReason === "error" || message.stopReason === "aborted") throw new Error(`Child model ${message.stopReason}`);
     final = message;
   };
-  // Count once per message_end; agent_end repeats the final message.
+  // Count usage on message_end only; agent_end repeats the final message.
   const addUsage = ({ usage: u }: AssistantMessage) => {
     if (!u) return;
     usage.input += u.input || 0;
@@ -199,7 +199,7 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
     } else if (event.type === "agent_settled") {
       if (phase !== "running" || !ended || !final || final.stopReason !== "stop" || final.content.some(part => part.type === "toolCall")) throw new Error("Missing or invalid final completion report");
       phase = "settled";
-      proc.stdin.end(); // Native RPC EOF disposes runtime and exits with status 0.
+      proc.stdin.end(); // On stdin EOF, Pi RPC mode shuts down and exits 0.
       exitTimer = setTimeout(() => fail("Child did not exit after completion"), 5000);
     } else if (event.type === "tool_execution_start") {
       const args = event.args ?? {};
