@@ -69,7 +69,7 @@ input.on("line", async line => {
       for (let i = 0; i < bytes.length; i++) { process.stdout.write(bytes.subarray(i, i + 1)); if (i % 5 === 0) await delay(1); }
     } else send({ type: "message_end", message: final });
   }
-  if (mode === "intermediate-only") { process.exit(0); return; }
+  if (mode === "intermediate-only") process.exit(0);
   send({ type: "agent_end", messages: mode === "missing" ? [] : [final] });
   // Distinct settled event is essential: agent_end alone is not completion.
   await delay(1);

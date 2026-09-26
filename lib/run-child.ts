@@ -31,7 +31,7 @@ export interface ChildUsage {
   contextTokens: number;
   turns: number;
 }
-export interface ChildReport { text: string; reportPath?: string; usage?: ChildUsage }
+export interface ChildReport { text: string; reportPath?: string; usage: ChildUsage }
 
 const MAX_RECORD_BYTES = 8 * 1024 * 1024;
 const TERMINATION_GRACE_MS = 500;
@@ -84,7 +84,7 @@ function redactor() {
     return text;
   };
 }
-function saveReport(text: string, usage?: ChildUsage): ChildReport {
+function saveReport(text: string, usage: ChildUsage): ChildReport {
   if (!truncateHead(text).truncated) return { text, usage };
   const dir = mkdtempSync(join(tmpdir(), "pi-toolkit-report-"));
   const reportPath = join(dir, "report.txt");

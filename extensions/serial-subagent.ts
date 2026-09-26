@@ -122,8 +122,7 @@ export default function (pi: ExtensionAPI) {
             onUpdate?.({ content: [{ type: "text", text: activity.at(-1) ?? "Working…" }], details: { agent: params.agent, summary, activity } });
           },
         });
-        const summary = report.usage && formatUsage(report.usage, contextWindow);
-        return { content: [{ type: "text", text: report.text }], details: { agent: params.agent, summary, reportPath: report.reportPath } };
+        return { content: [{ type: "text", text: report.text }], details: { agent: params.agent, summary: formatUsage(report.usage, contextWindow), reportPath: report.reportPath } };
       } finally {
         signal?.removeEventListener("abort", abort);
         active = undefined;

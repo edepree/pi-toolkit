@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { DefaultResourceLoader, SettingsManager, loadSkills, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
-test("Pi discovers Janitor from the declared skill paths without warnings", async () => {
-  const { loadSkills, parseFrontmatter } = await import("@earendil-works/pi-coding-agent");
+test("Pi discovers Janitor from the declared skill paths without warnings", () => {
   const pkg = JSON.parse(readFileSync("package.json", "utf8"));
   const { frontmatter } = parseFrontmatter(readFileSync("skills/janitor/SKILL.md", "utf8"));
   assert.equal(frontmatter.name, "janitor");
@@ -22,10 +23,6 @@ test("Pi discovers Janitor from the declared skill paths without warnings", asyn
 });
 
 test("actual Pi resource loader discovers the registered sequential extension in isolated settings", async (t) => {
-  const { mkdtempSync, rmSync } = await import("node:fs");
-  const { tmpdir } = await import("node:os");
-  const { join } = await import("node:path");
-  const { DefaultResourceLoader, SettingsManager } = await import("@earendil-works/pi-coding-agent");
   const dir = mkdtempSync(join(tmpdir(), "pi-toolkit-loader-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const loader = new DefaultResourceLoader({

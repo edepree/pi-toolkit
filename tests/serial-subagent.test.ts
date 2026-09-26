@@ -14,6 +14,11 @@ function temporary(t: test.TestContext) {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
+function setEnv(t: test.TestContext, name: string, value: string) {
+  const old = process.env[name];
+  process.env[name] = value;
+  t.after(() => { if (old === undefined) delete process.env[name]; else process.env[name] = old; });
+}
 async function until(predicate: () => boolean, message: string) {
   const deadline = Date.now() + 8000;
   while (!predicate()) {
@@ -31,11 +36,8 @@ async function runner() {
 async function registered(t: test.TestContext, mode = "success") {
   const cwd = temporary(t);
   writeFileSync(join(cwd, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent", bin: { pi: fixture } }));
-  const oldRoot = process.env.PI_PACKAGE_DIR;
-  const oldMode = process.env.CHILD_MODE;
-  process.env.PI_PACKAGE_DIR = cwd;
-  process.env.CHILD_MODE = mode;
-  t.after(() => { if (oldRoot === undefined) delete process.env.PI_PACKAGE_DIR; else process.env.PI_PACKAGE_DIR = oldRoot; if (oldMode === undefined) delete process.env.CHILD_MODE; else process.env.CHILD_MODE = oldMode; });
+  setEnv(t, "PI_PACKAGE_DIR", cwd);
+  setEnv(t, "CHILD_MODE", mode);
   let tool!: ToolDefinition;
   const handlers = new Map<string, (...args: any[]) => any>();
   const api = { registerTool: (value: ToolDefinition) => { tool = value; }, on: (event: string, handler: (...args: any[]) => any) => handlers.set(event, handler) } as unknown as ExtensionAPI;
@@ -119,9 +121,7 @@ test("oversized reports are privately saved and bounded including file reference
 
 test("progress and stderr are bounded and credential values are not returned", async (t) => {
   const runChild = await runner();
-  const old = process.env.LLAMA_API_KEY;
-  process.env.LLAMA_API_KEY = "fixture-secret-do-not-return";
-  t.after(() => { if (old === undefined) delete process.env.LLAMA_API_KEY; else process.env.LLAMA_API_KEY = old; });
+  setEnv(t, "LLAMA_API_KEY", "fixture-secret-do-not-return");
   const updates: { usage: object; activity: string[] }[] = [];
   const report = await runChild(options("progress-secret", temporary(t), { onProgress: (p: { usage: object; activity: string[] }) => updates.push(p) }));
   const activity = updates.at(-1)!.activity;
@@ -159,9 +159,7 @@ for (const agent of ["worker", "reviewer"]) {
   test(`${agent} receives actual allowlist, model, cwd, env, trust and fresh-session flags`, async (t) => {
     const { tool, ctx, cwd } = await registered(t);
     const task = "--provider evil; $(touch SHOULD_NOT_EXIST)\n@not-an-input-file";
-    const old = process.env.TOOLKIT_ENV_SENTINEL;
-    process.env.TOOLKIT_ENV_SENTINEL = "inherited";
-    t.after(() => { if (old === undefined) delete process.env.TOOLKIT_ENV_SENTINEL; else process.env.TOOLKIT_ENV_SENTINEL = old; });
+    setEnv(t, "TOOLKIT_ENV_SENTINEL", "inherited");
     for (const trusted of [false, true]) {
       const result = await tool.execute("call", { agent, task }, undefined, undefined, { ...ctx, isProjectTrusted: () => trusted });
       assert.match((result.content[0] as { text: string }).text, /Final/);
