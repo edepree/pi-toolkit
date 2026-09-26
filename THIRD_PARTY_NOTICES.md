@@ -45,13 +45,30 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## Code Simplifier skill
+
+`skills/code-simplifier/SKILL.md` is adapted from Anthropic's **code-simplifier**
+agent in [claude-plugins-official](https://github.com/anthropics/claude-plugins-official).
+
+- Source: [`plugins/code-simplifier/agents/code-simplifier.md`](https://github.com/anthropics/claude-plugins-official/blob/fa59bc9037741ecfa131aa27938272605710d7b2/plugins/code-simplifier/agents/code-simplifier.md)
+- Upstream revision: `fa59bc9037741ecfa131aa27938272605710d7b2`
+- License: Apache License 2.0; a copy is included at `skills/code-simplifier/LICENSE`.
+
+Changes from upstream:
+
+- Converted from a Claude Code agent to a Pi skill. Removed the `model` field and the claim that it runs autonomously.
+- Replaced the hard-coded standards from Anthropic's own `CLAUDE.md` (the `function` keyword, React patterns, explicit return types) with the project's own conventions.
+- Added `git diff`-based scope detection and protection for unrelated changes.
+- Added before-and-after validation checks, reverting a refinement if behavior changes.
+- Pointed deletion-oriented cleanup to the Janitor skill.
+
 ## Pi subagent example
 
 `extensions/serial-subagent.ts` and `lib/run-child.ts` adapt the subprocess-delegation
 approach of Pi's subagent example, with new fixed roles, sequential execution,
 pre-inference RPC identity verification, bounded parsing/reporting, and Linux
 process-tree cleanup. They do not include the example's agent discovery,
-parallel/chain scheduler, or custom rendering.
+parallel/chain scheduler, or message-history rendering.
 
 - Source: [`packages/coding-agent/examples/extensions/subagent/index.ts`](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/examples/extensions/subagent/index.ts)
 - Reference version: installed `@earendil-works/pi-coding-agent` **0.85.1**

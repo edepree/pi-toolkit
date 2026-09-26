@@ -1,20 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-test("package declares the Janitor skill", () => {
-  assert.ok(existsSync("package.json"), "package manifest is missing");
-  const pkg = JSON.parse(readFileSync("package.json", "utf8"));
-  assert.ok(pkg.keywords.includes("pi-package"));
-  assert.deepEqual(pkg.pi.skills, ["./skills"]);
-  assert.deepEqual(pkg.pi.extensions, ["./extensions/serial-subagent.ts"]);
-  assert.ok(existsSync("skills/janitor/SKILL.md"));
-});
-
 test("Pi discovers Janitor from the declared skill paths without warnings", async () => {
-  assert.ok(existsSync("package.json"), "package manifest is missing");
-  assert.ok(existsSync("skills/janitor/SKILL.md"), "Janitor skill is missing");
   const { loadSkills, parseFrontmatter } = await import("@earendil-works/pi-coding-agent");
   const pkg = JSON.parse(readFileSync("package.json", "utf8"));
   const { frontmatter } = parseFrontmatter(readFileSync("skills/janitor/SKILL.md", "utf8"));
@@ -27,9 +16,9 @@ test("Pi discovers Janitor from the declared skill paths without warnings", asyn
     includeDefaults: false,
   });
   assert.deepEqual(diagnostics, []);
-  assert.deepEqual(skills.map((skill) => skill.name), ["janitor"]);
-  assert.equal(skills[0].filePath, resolve("skills/janitor/SKILL.md"));
-  assert.equal(skills[0].disableModelInvocation, false);
+  assert.deepEqual(skills.map((skill) => skill.name), ["code-simplifier", "janitor"]);
+  assert.equal(skills.find(s => s.name === "janitor")!.filePath, resolve("skills/janitor/SKILL.md"));
+  assert.equal(skills.every(s => !s.disableModelInvocation), true);
 });
 
 test("actual Pi resource loader discovers the registered sequential extension in isolated settings", async (t) => {

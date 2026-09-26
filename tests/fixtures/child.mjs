@@ -56,6 +56,7 @@ input.on("line", async line => {
   if (mode === "large") text = "café 🐈\n".repeat(7000);
   if (mode === "long-line") text = "x".repeat(70000);
   if (mode === "progress-secret") {
+    send({ type: "tool_execution_start", toolCallId: "t", toolName: "bash", args: { command: `echo ${process.env.LLAMA_API_KEY}\n&& ls` } });
     send({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", delta: process.env.LLAMA_API_KEY + "p".repeat(10000), contentIndex: 0 } });
     text = `Final ${process.env.LLAMA_API_KEY}`;
   }

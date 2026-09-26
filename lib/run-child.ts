@@ -18,9 +18,10 @@ export interface ChildOptions {
   prompt: string;
   expected: { provider: string; model: string; thinkingLevel: NonNullable<ExtensionContext["thinkingLevel"]> };
   signal?: AbortSignal;
-  onProgress?: (text: string) => void;
-  onUsage?: (usage: ChildUsage) => void;
+  onProgress?: (progress: ChildProgress) => void;
 }
+// activity: last few redacted one-line notes (tool calls, assistant text).
+export interface ChildProgress { usage: ChildUsage; activity: string[] }
 export interface ChildUsage {
   input: number;
   output: number;
@@ -75,6 +76,7 @@ function signalOwned(identity: ProcessIdentity, signal: NodeJS.Signals, group = 
 
 function redactor() {
   const secrets = Object.entries(process.env)
+    // LLAMA_BASE_URL may embed credentials (https://user:pass@host).
     .filter(([name, value]) => value && (/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i.test(name) || name === "LLAMA_BASE_URL"))
     .map(([, value]) => value!).sort((a, b) => b.length - a.length);
   return (text: string) => {
@@ -109,10 +111,10 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
   let pending = "";
   const decoder = new StringDecoder("utf8");
   const stderrDecoder = new StringDecoder("utf8");
-  const lifecycle: { phase: "state" | "prompt" | "running" | "settled" } = { phase: "state" };
+  let phase = "state" as "state" | "prompt" | "running" | "settled";
   let final: AssistantMessage | undefined;
   let ended = false;
-  let usage: ChildUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
+  const usage: ChildUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
   let startupTimer: NodeJS.Timeout | undefined;
   let exitTimer: NodeJS.Timeout | undefined;
 
@@ -145,17 +147,23 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
     if (message.provider !== options.expected.provider || message.model !== options.expected.model) throw new Error("Child model identity changed");
     if (message.stopReason === "error" || message.stopReason === "aborted") throw new Error(`Child model ${message.stopReason}`);
     final = message;
-    const msgUsage = message.usage;
-    if (msgUsage) {
-      usage.input += msgUsage.input || 0;
-      usage.output += msgUsage.output || 0;
-      usage.cacheRead += msgUsage.cacheRead || 0;
-      usage.cacheWrite += msgUsage.cacheWrite || 0;
-      usage.cost += msgUsage.cost?.total || 0;
-      usage.contextTokens = msgUsage.totalTokens || 0;
-      usage.turns++;
-      options.onUsage?.(usage);
-    }
+  };
+  // Count once per message_end; agent_end repeats the final message.
+  const addUsage = ({ usage: u }: AssistantMessage) => {
+    if (!u) return;
+    usage.input += u.input || 0;
+    usage.output += u.output || 0;
+    usage.cacheRead += u.cacheRead || 0;
+    usage.cacheWrite += u.cacheWrite || 0;
+    usage.cost += u.cost?.total || 0;
+    usage.contextTokens = u.totalTokens || 0;
+    usage.turns++;
+  };
+  const activity: string[] = [];
+  const progress = (line?: string) => {
+    if (line) activity.push(redact(line).replace(/\s+/g, " ").trim().slice(0, 120));
+    if (activity.length > 5) activity.shift();
+    options.onProgress?.({ usage: { ...usage }, activity: [...activity] });
   };
   const handle = (line: string) => {
     if (!line.trim() || failure) return;
@@ -164,18 +172,21 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
     if (!event || typeof event !== "object" || typeof event.type !== "string") throw new Error("Invalid child protocol record");
     if (event.type === "response") {
       if (!event.success) throw new Error("Child RPC command failed (diagnostic content withheld)");
-      if (event.id === "identity" && event.command === "get_state" && lifecycle.phase === "state") {
+      if (event.id === "identity" && event.command === "get_state" && phase === "state") {
         const state = event.data;
         if (state?.model?.provider !== options.expected.provider || state.model.id !== options.expected.model || state.thinkingLevel !== options.expected.thinkingLevel) throw new Error("Child model/thinking identity mismatch; task not sent");
         if (state.sessionFile || state.messageCount !== 0 || state.pendingMessageCount !== 0 || state.isStreaming !== false || state.isCompacting !== false) throw new Error("Child session is not fresh and idle; task not sent");
-        lifecycle.phase = "prompt";
+        phase = "prompt";
         send({ type: "prompt", id: "task", message: options.prompt });
-      } else if (event.id === "task" && event.command === "prompt" && lifecycle.phase === "prompt") {
-        lifecycle.phase = "running";
+      } else if (event.id === "task" && event.command === "prompt" && phase === "prompt") {
+        phase = "running";
         clearTimeout(startupTimer);
       } else throw new Error("Unexpected child RPC response");
     } else if (event.type === "message_end" && event.message?.role === "assistant") {
       readAssistant(event.message);
+      addUsage(event.message);
+      const text = event.message.content.find(part => part.type === "text" && part.text.trim());
+      progress(text?.type === "text" ? text.text : undefined);
     } else if (event.type === "agent_start") {
       ended = false;
       final = undefined;
@@ -186,12 +197,13 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
       readAssistant(last);
       ended = true;
     } else if (event.type === "agent_settled") {
-      if (lifecycle.phase !== "running" || !ended || !final || final.stopReason !== "stop" || final.content.some(part => part.type === "toolCall")) throw new Error("Missing or invalid final completion report");
-      lifecycle.phase = "settled";
+      if (phase !== "running" || !ended || !final || final.stopReason !== "stop" || final.content.some(part => part.type === "toolCall")) throw new Error("Missing or invalid final completion report");
+      phase = "settled";
       proc.stdin.end(); // Native RPC EOF disposes runtime and exits with status 0.
       exitTimer = setTimeout(() => fail("Child did not exit after completion"), 5000);
-    } else if (event.type === "message_update" || event.type === "tool_execution_start") {
-      options.onProgress?.("Child working; waiting for final report and process exit.");
+    } else if (event.type === "tool_execution_start") {
+      const args = event.args ?? {};
+      progress(`→ ${event.toolName} ${args.command ?? args.path ?? args.pattern ?? JSON.stringify(args)}`);
     }
   };
   const stdoutData = (chunk: Buffer) => {
@@ -228,18 +240,18 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
   });
   try {
     startupTimer = setTimeout(() => fail("Child RPC startup timed out"), STARTUP_TIMEOUT_MS);
-    if (options.signal?.aborted) abort();
-    else send({ type: "get_state", id: "identity" });
+    send({ type: "get_state", id: "identity" });
     const status = await exited;
     await stopping;
     if (failure) throw new Error(failure);
     if (status.code !== 0 || status.signal) throw new Error(`Child exit ${status.code ?? "signal"}${status.signal ? ` (${status.signal})` : ""}${stderr ? `\n${redact(stderr)}` : ""}`);
-    if (lifecycle.phase !== "settled" || !final) throw new Error("Child exited without final completion");
+    if (phase !== "settled" || !final) throw new Error("Child exited without final completion");
     const text = final.content.filter(part => part.type === "text").map(part => part.text).join("\n");
     if (!text.trim()) throw new Error("Child final report is empty");
     return saveReport(redact(text), usage);
   } catch (error) {
-    throw new Error(`${redact((error as Error).message)}\nPartial file changes may remain; no rollback or retry was performed.`);
+    const note = phase === "state" ? "" : "\nPartial file changes may remain; no rollback or retry was performed.";
+    throw new Error(redact((error as Error).message) + note);
   } finally {
     clearTimeout(startupTimer);
     clearTimeout(exitTimer);

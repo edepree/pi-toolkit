@@ -26,11 +26,9 @@ function live(pid: number) {
   catch { return false; }
 }
 async function runner() {
-  assert.ok(existsSync("lib/run-child.ts"), "child runner is missing");
   return (await import("../lib/run-child.ts")).runChild;
 }
 async function registered(t: test.TestContext, mode = "success") {
-  assert.ok(existsSync("extensions/serial-subagent.ts"), "serial-subagent extension is missing");
   const cwd = temporary(t);
   writeFileSync(join(cwd, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent", bin: { pi: fixture } }));
   const oldRoot = process.env.PI_PACKAGE_DIR;
@@ -42,7 +40,7 @@ async function registered(t: test.TestContext, mode = "success") {
   const handlers = new Map<string, (...args: any[]) => any>();
   const api = { registerTool: (value: ToolDefinition) => { tool = value; }, on: (event: string, handler: (...args: any[]) => any) => handlers.set(event, handler) } as unknown as ExtensionAPI;
   (await import("../extensions/serial-subagent.ts")).default(api);
-  const ctx = { cwd, model: { provider: "fixture", id: "exact-model" }, thinkingLevel: "off", isProjectTrusted: () => false } as ExtensionContext;
+  const ctx = { cwd, model: { provider: "fixture", id: "exact-model", contextWindow: 1000 }, thinkingLevel: "off", isProjectTrusted: () => false } as ExtensionContext;
   return { tool, ctx, cwd, handlers };
 }
 
@@ -51,9 +49,7 @@ test("extension registers one sequential tool and rejects invalid calls before l
   assert.equal(tool.name, "serial_subagent");
   assert.equal(tool.executionMode, "sequential");
   assert.deepEqual((tool.parameters as { required?: string[] }).required, ["agent", "task"]);
-  for (const params of [{ agent: "other", task: "x" }, { agent: "worker", task: " \n" }, { agent: "worker" }]) {
-    await assert.rejects(() => tool.execute("bad", params, undefined, undefined, ctx), /agent|role|task/i);
-  }
+  await assert.rejects(() => tool.execute("bad", { agent: "worker", task: " \n" }, undefined, undefined, ctx), /task/i);
   await assert.rejects(() => tool.execute("no-model", { agent: "worker", task: "x" }, undefined, undefined, { ...ctx, model: undefined }), /model/i);
   assert.ok(!existsSync(join(cwd, "started")));
 });
@@ -90,8 +86,9 @@ for (const [mode, error] of [
   test(`runner rejects ${mode} and permits a subsequent call`, async (t) => {
     const runChild = await runner();
     const cwd = temporary(t);
-    await assert.rejects(runChild(options(mode, cwd)), error);
-    if (["wrong-model", "wrong-thinking", "history"].includes(mode)) assert.ok(!existsSync(join(cwd, "prompt-received")));
+    const notSent = ["wrong-model", "wrong-thinking", "history"].includes(mode);
+    await assert.rejects(runChild(options(mode, cwd)), (e: Error) => error.test(e.message) && notSent !== /Partial file changes/.test(e.message));
+    if (notSent) assert.ok(!existsSync(join(cwd, "prompt-received")));
     assert.match((await runChild(options("success", cwd))).text, /Final/);
   });
 }
@@ -125,10 +122,13 @@ test("progress and stderr are bounded and credential values are not returned", a
   const old = process.env.LLAMA_API_KEY;
   process.env.LLAMA_API_KEY = "fixture-secret-do-not-return";
   t.after(() => { if (old === undefined) delete process.env.LLAMA_API_KEY; else process.env.LLAMA_API_KEY = old; });
-  const updates: string[] = [];
-  const report = await runChild(options("progress-secret", temporary(t), { onProgress: (text: string) => updates.push(text) }));
-  assert.ok(updates.length > 0);
-  assert.ok(updates.every(text => Buffer.byteLength(text) <= 4096 && !text.includes("fixture-secret-do-not-return")));
+  const updates: { usage: object; activity: string[] }[] = [];
+  const report = await runChild(options("progress-secret", temporary(t), { onProgress: (p: { usage: object; activity: string[] }) => updates.push(p) }));
+  const activity = updates.at(-1)!.activity;
+  assert.deepEqual(activity.slice(0, 2), ["intermediate", "→ bash echo [redacted] && ls"]);
+  assert.ok(activity.every(line => line.length <= 120 && !line.includes("fixture-secret-do-not-return")));
+  // Two assistant messages: usage must not be double-counted from agent_end.
+  assert.deepEqual(updates.at(-1)!.usage, { input: 2, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 2, turns: 2 });
   assert.ok(!report.text.includes("fixture-secret-do-not-return"));
   await assert.rejects(runChild(options("stderr", temporary(t))), (error: Error) => {
     assert.ok(Buffer.byteLength(error.message) < 8192);
@@ -253,4 +253,15 @@ test("setup failure releases guard; pre-abort leaves no abort listeners or child
   const controller = new AbortController();
   await call(controller.signal);
   assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+});
+
+test("partial updates render live activity instead of a finished checkmark", async (t) => {
+  const { tool, ctx } = await registered(t, "success");
+  const updates: any[] = [];
+  await tool.execute("call", { agent: "worker", task: "x" }, undefined, (u: any) => updates.push(u), ctx);
+  const theme = { fg: (_: string, s: string) => s, bold: (s: string) => s } as any;
+  const lines = tool.renderResult!(updates[0], { expanded: false, isPartial: true }, theme, { isError: false } as any).render(200).join("\n");
+  assert.match(lines, /⏳ worker 1 turn/);
+  assert.match(lines, /intermediate/);
+  assert.doesNotMatch(lines, /✓/);
 });

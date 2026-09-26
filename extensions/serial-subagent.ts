@@ -4,9 +4,7 @@ import { getPackageDir, getMarkdownTheme, type ExtensionAPI } from "@earendil-wo
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { runChild } from "../lib/run-child.ts";
-
-const DEFAULT_MAX_CONTEXT = 128000;
+import { runChild, type ChildUsage } from "../lib/run-child.ts";
 
 function formatTokens(count: number): string {
   if (count < 1000) return count.toString();
@@ -15,11 +13,20 @@ function formatTokens(count: number): string {
   return `${(count / 1000000).toFixed(1)}M`;
 }
 
-function formatProgressBar(pct: number, width: number): string {
-  const filled = Math.round((pct / 100) * width);
-  const empty = width - filled;
-  const bar = "\u2588".repeat(Math.max(0, filled)) + "\u2591".repeat(Math.max(0, empty));
-  return `${pct.toFixed(1)}% [${bar}]`;
+function formatUsage(usage: ChildUsage, contextWindow: number): string {
+  const parts: string[] = [];
+  if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
+  if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
+  if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
+  if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
+  if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
+  if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
+  if (usage.contextTokens > 0 && contextWindow > 0) {
+    const pct = Math.min(100, (usage.contextTokens / contextWindow) * 100);
+    const filled = Math.round((pct / 100) * 16);
+    parts.push(`ctx:${formatTokens(usage.contextTokens)}/${formatTokens(contextWindow)}`, `${pct.toFixed(1)}% [${"█".repeat(filled)}${"░".repeat(16 - filled)}]`);
+  }
+  return parts.join(" ");
 }
 
 const roles = {
@@ -64,70 +71,34 @@ export default function (pi: ExtensionAPI) {
     ],
     parameters: Type.Object({ agent: StringEnum(["worker", "reviewer"] as const), task: Type.String({ minLength: 1 }) }),
 
-    renderResult(result, { expanded }, theme, { isError }) {
-      const details = result.details as { reportPath?: string; usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; contextTokens?: number; turns?: number }; agent?: string } | undefined;
-      const usage = details?.usage;
-      const agent = details?.agent ?? "agent";
-      const mdTheme = getMarkdownTheme();
-
-      if (expanded) {
-        const container = new Container();
-        const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
-        container.addChild(new Text(`${icon} ${theme.fg("toolTitle", theme.bold(agent))}`, 0, 0));
-        container.addChild(new Spacer(1));
-        const text = result.content[0];
-        container.addChild(new Markdown(text?.type === "text" ? text.text : "(no output)", 0, 0, mdTheme));
-        if (usage) {
-          container.addChild(new Spacer(1));
-          const parts: string[] = [];
-          if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
-          if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
-          if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
-          if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
-          if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
-          if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
-          if (usage.contextTokens && usage.contextTokens > 0) {
-            const pct = (usage.contextTokens / DEFAULT_MAX_CONTEXT) * 100;
-            parts.push(`ctx:${formatTokens(usage.contextTokens)}/${formatTokens(DEFAULT_MAX_CONTEXT)}`);
-            parts.push(formatProgressBar(pct, 16));
-          }
-          container.addChild(new Text(theme.fg("dim", parts.join(" ")), 0, 0));
-        }
-        if (details?.reportPath) {
-          container.addChild(new Text(theme.fg("dim", `Full report: ${details.reportPath}`), 0, 0));
-        }
-        return container;
+    renderResult(result, { expanded, isPartial }, theme, { isError }) {
+      const details = result.details as { agent?: string; summary?: string; reportPath?: string; activity?: string[] } | undefined;
+      const icon = isPartial ? theme.fg("warning", "⏳") : isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
+      const title = `${icon} ${theme.fg("toolTitle", theme.bold(details?.agent ?? "agent"))}`;
+      const summary = details?.summary ? theme.fg("dim", details.summary) : "";
+      if (isPartial) {
+        const lines = (details?.activity ?? []).map(line => theme.fg("muted", line));
+        return new Text([summary ? `${title} ${summary}` : title, ...(lines.length ? lines : [theme.fg("muted", "starting…")])].join("\n"), 0, 0);
       }
-
-      let text = `${isError ? theme.fg("error", "✗") : theme.fg("success", "✓")} ${theme.fg("toolTitle", theme.bold(agent))}`;
-      if (usage) {
-        const parts: string[] = [];
-        if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
-        if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
-        if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
-        if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
-        if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
-        if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
-        if (usage.contextTokens && usage.contextTokens > 0) {
-          const pct = (usage.contextTokens / DEFAULT_MAX_CONTEXT) * 100;
-          parts.push(`ctx:${formatTokens(usage.contextTokens)}/${formatTokens(DEFAULT_MAX_CONTEXT)}`);
-          parts.push(formatProgressBar(pct, 16));
-        }
-        text += ` ${theme.fg("dim", parts.join(" "))}`;
-      }
-      if (details?.reportPath) {
-        text += `\n${theme.fg("dim", `Full report: ${details.reportPath}`)}`;
-      }
-      return new Text(text, 0, 0);
+      const report = details?.reportPath ? theme.fg("dim", `Full report: ${details.reportPath}`) : "";
+      if (!expanded) return new Text([summary ? `${title} ${summary}` : title, report].filter(Boolean).join("\n"), 0, 0);
+      const text = result.content[0];
+      const container = new Container();
+      container.addChild(new Text(title, 0, 0));
+      container.addChild(new Spacer(1));
+      container.addChild(new Markdown(text?.type === "text" ? text.text : "(no output)", 0, 0, getMarkdownTheme()));
+      if (summary) { container.addChild(new Spacer(1)); container.addChild(new Text(summary, 0, 0)); }
+      if (report) container.addChild(new Text(report, 0, 0));
+      return container;
     },
     executionMode: "sequential",
     async execute(_id, params, signal, onUpdate, ctx) {
-      if (params.agent !== "worker" && params.agent !== "reviewer") throw new Error("agent must be worker or reviewer");
-      if (typeof params.task !== "string" || !params.task.trim()) throw new Error("task must not be blank");
+      // Pi validates params against the schema; minLength allows whitespace-only tasks.
+      if (!params.task.trim()) throw new Error("task must not be blank");
       if (!ctx.model) throw new Error("An active parent model is required");
       if (active) throw new Error("serial_subagent is busy: a child is still running or cleaning up");
       if (shuttingDown) throw new Error("serial_subagent session is shutting down");
-      if (signal?.aborted) throw new Error("Child cancelled before launch");
+      const { provider, id: model, contextWindow } = ctx.model;
       const controller = new AbortController();
       let complete!: () => void;
       active = { controller, done: new Promise<void>(resolve => { complete = resolve; }) };
@@ -140,32 +111,19 @@ export default function (pi: ExtensionAPI) {
         const report = await runChild({
           command: process.execPath,
           args: [piCommand(), "--mode", "rpc", "--no-session", "--no-extensions", "--no-prompt-templates",
-            "--tools", role.tools, "--provider", ctx.model.provider, "--model", ctx.model.id, "--thinking", thinkingLevel,
+            "--tools", role.tools, "--provider", provider, "--model", model, "--thinking", thinkingLevel,
             ctx.isProjectTrusted() ? "--approve" : "--no-approve", "--append-system-prompt", role.prompt],
           cwd: ctx.cwd,
           prompt: `Task: ${params.task}`,
-          expected: { provider: ctx.model.provider, model: ctx.model.id, thinkingLevel },
+          expected: { provider, model, thinkingLevel },
           signal: controller.signal,
-          onProgress: (text) => {
-            onUpdate?.({ content: [{ type: "text", text }], details: {} });
-          },
-          onUsage: (usage) => {
-            const pct = usage.contextTokens ? (usage.contextTokens / DEFAULT_MAX_CONTEXT) * 100 : 0;
-            const parts: string[] = [];
-            if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
-            if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
-            if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
-            if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
-            if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
-            if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
-            if (usage.contextTokens && usage.contextTokens > 0) {
-              parts.push(`ctx:${formatTokens(usage.contextTokens)}/${formatTokens(DEFAULT_MAX_CONTEXT)}`);
-              parts.push(formatProgressBar(pct, 16));
-            }
-            onUpdate?.({ content: [{ type: "text", text: `Working: ${parts.join(" ")}` }], details: {} });
+          onProgress: ({ usage, activity }) => {
+            const summary = formatUsage(usage, contextWindow);
+            onUpdate?.({ content: [{ type: "text", text: activity.at(-1) ?? "Working…" }], details: { agent: params.agent, summary, activity } });
           },
         });
-        return { content: [{ type: "text", text: report.text }], details: { reportPath: report.reportPath, usage: report.usage, agent: params.agent } };
+        const summary = report.usage && formatUsage(report.usage, contextWindow);
+        return { content: [{ type: "text", text: report.text }], details: { agent: params.agent, summary, reportPath: report.reportPath } };
       } finally {
         signal?.removeEventListener("abort", abort);
         active = undefined;
