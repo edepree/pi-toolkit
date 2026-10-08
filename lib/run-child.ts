@@ -42,7 +42,9 @@ function processIdentity(pid: number): ProcessIdentity | undefined {
   try {
     const raw = readFileSync(`/proc/${pid}/stat`, "utf8");
     const fields = raw.slice(raw.lastIndexOf(")") + 2).split(" ");
-    return { pid, state: fields[0], parent: Number(fields[1]), group: Number(fields[2]), start: fields[19] };
+    const state = fields[0], start = fields[19];
+    if (state === undefined || start === undefined) throw new Error(`Unexpected /proc/${pid}/stat format`);
+    return { pid, state, parent: Number(fields[1]), group: Number(fields[2]), start };
   } catch (error) {
     if (["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) return undefined;
     throw error;
@@ -205,8 +207,10 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
       proc.stdin.end(); // On stdin EOF, Pi RPC mode shuts down and exits 0.
       exitTimer = setTimeout(() => fail("Child did not exit after completion"), 5000);
     } else if (event.type === "tool_execution_start") {
-      const args = event.args ?? {};
-      progress(`→ ${event.toolName} ${args.command ?? args.path ?? args.pattern ?? JSON.stringify(args)}`);
+      // args is untyped child output: show the first string hint, else the JSON.
+      const args: unknown = event.args ?? {};
+      const hint = ["command", "path", "pattern"].map(key => (args as Record<string, unknown>)[key]).find(value => typeof value === "string");
+      progress(`→ ${event.toolName} ${hint ?? JSON.stringify(args)}`);
     }
   };
   const stdoutData = (chunk: Buffer) => {

@@ -27,7 +27,7 @@ async function until(predicate: () => boolean, message: string) {
   }
 }
 function live(pid: number) {
-  try { return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1][0] !== "Z"; }
+  try { return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]?.[0] !== "Z"; }
   catch { return false; }
 }
 async function runner() {
@@ -180,7 +180,7 @@ for (const agent of ["worker", "reviewer"]) {
       assert.match((result.content[0] as { text: string }).text, /Final/);
       const launch = JSON.parse(readFileSync(join(cwd, "launch.json"), "utf8"));
       const args: string[] = launch.args;
-      const value = (flag: string) => args[args.indexOf(flag) + 1];
+      const value = (flag: string) => args[args.indexOf(flag) + 1] ?? "";
       assert.equal(value("--mode"), "rpc");
       assert.equal(value("--tools"), agent === "worker" ? "read,bash,edit,write,grep,find,ls" : "read,grep,find,ls");
       assert.match(value("--append-system-prompt"), agent === "worker" ? /^You are the worker .*do not claim rollback\.$/ : /^You are the read-only reviewer .*disclose credentials\.$/);
@@ -241,13 +241,13 @@ test("extension releases busy state after failure and cancellation", async (t) =
   const { tool, ctx, cwd } = await registered(t, "fail-after-final");
   const call = (signal?: AbortSignal) => tool.execute("call", { agent: "reviewer", task: "x" }, signal, undefined, ctx);
   await assert.rejects(call(), /exit/);
-  process.env.CHILD_MODE = "hang";
+  process.env["CHILD_MODE"] = "hang";
   const controller = new AbortController();
   const rejected = assert.rejects(call(controller.signal), /cancel|abort/i);
   await until(() => existsSync(join(cwd, "ready")), "ready for cancellation");
   controller.abort();
   await rejected;
-  process.env.CHILD_MODE = "success";
+  process.env["CHILD_MODE"] = "success";
   assert.match(((await call()).content[0] as { text: string }).text, /Final/);
 });
 
@@ -285,9 +285,9 @@ test("setup failure releases guard; pre-abort leaves no abort listeners or child
   await assert.rejects(call(signal), /cancel|abort/i);
   assert.equal(getEventListeners(signal, "abort").length, 0);
   assert.ok(!existsSync(join(cwd, "started")));
-  process.env.PI_PACKAGE_DIR = join(cwd, "absent");
+  process.env["PI_PACKAGE_DIR"] = join(cwd, "absent");
   await assert.rejects(call());
-  process.env.PI_PACKAGE_DIR = cwd;
+  process.env["PI_PACKAGE_DIR"] = cwd;
   const controller = new AbortController();
   await call(controller.signal);
   assert.equal(getEventListeners(controller.signal, "abort").length, 0);
@@ -304,4 +304,11 @@ test("partial updates render live activity instead of a finished checkmark", asy
   assert.doesNotMatch(lines, /✓/);
   const done = tool.renderResult!({ content: [], details: updates.at(-1).details }, { expanded: false, isPartial: false }, theme, { isError: false, durationMs: 1234 } as any).render(200).join("\n");
   assert.match(done, /✓ worker .*1\.2s/);
+  (await import("@earendil-works/pi-coding-agent")).initTheme("dark");
+  const details = { ...updates.at(-1).details, reportPath: "/tmp/report.txt" };
+  const expanded = tool.renderResult!({ content: [{ type: "text", text: "Final **report**" }], details }, { expanded: true, isPartial: false }, theme, { isError: true, durationMs: 50 } as any).render(200).join("\n");
+  assert.match(expanded, /✗ worker fixture\/exact-model/);
+  assert.match(expanded, /Final .*report/);
+  assert.match(expanded, /2 turns.*0\.1s/);
+  assert.match(expanded, /Full report: \/tmp\/report\.txt/);
 });

@@ -45,7 +45,7 @@ function loadAgent(file: string): Agent {
     throw new Error(`Invalid agent file ${file}: needs name, description, tools and a prompt body`);
   }
   if (model !== undefined && !(typeof model === "string" && splitModel(model))) throw new Error(`Invalid agent file ${file}: model must be provider/id`);
-  return { name, description, tools, model: model as string | undefined, prompt };
+  return { name, description, tools, prompt, ...(typeof model === "string" && { model }) };
 }
 const agentFiles = readdirSync(agentsDir).filter(file => file.endsWith(".md")).sort();
 const roles: Record<string, Agent> = {};
@@ -66,6 +66,14 @@ function piCommand(): string {
   return command;
 }
 
+const parameters = Type.Object({
+  agent: StringEnum(Object.keys(roles)),
+  task: Type.String({ minLength: 1 }),
+  model: Type.Optional(Type.String({ description: "provider/id of the child model; defaults to the agent's model, then the parent's" })),
+});
+// Optional because results persisted by older versions may lack fields.
+interface SubagentDetails { agent?: string; model?: string; summary?: string; reportPath?: string; activity?: string[] }
+
 export default function (pi: ExtensionAPI) {
   let active: { controller: AbortController; done: Promise<void> } | undefined;
   let shuttingDown = false;
@@ -74,7 +82,7 @@ export default function (pi: ExtensionAPI) {
     active?.controller.abort();
     await active?.done;
   });
-  pi.registerTool({
+  pi.registerTool<typeof parameters, SubagentDetails>({
     name: "serial_subagent",
     label: "Serial subagent",
     description: `Run one blocking agent in a fresh Pi process. Agents: ${agentList}. Linux only. Child extensions (including permission extensions) are disabled: not a sandbox. Output is limited to ${formatSize(DEFAULT_MAX_BYTES)}/${DEFAULT_MAX_LINES} lines; when truncated, the full report is saved to a private file and its path is returned.`,
@@ -86,16 +94,12 @@ export default function (pi: ExtensionAPI) {
       "serial_subagent model is optional (provider/id); it overrides the agent's default model, which otherwise falls back to your own model. Only configured models with credentials work.",
       "Do not use serial_subagent to bypass an explicit security restriction: child permission/sandbox extensions are not inherited. Serialization is session-local, not server-wide.",
     ],
-    parameters: Type.Object({
-      agent: StringEnum(Object.keys(roles)),
-      task: Type.String({ minLength: 1 }),
-      model: Type.Optional(Type.String({ description: "provider/id of the child model; defaults to the agent's model, then the parent's" })),
-    }),
+    parameters,
     // Orchestrates a whole child agent; codemode scripts must not fan it out.
     exposure: "model-only",
 
     renderResult(result, { expanded, isPartial }, theme, { isError, durationMs }) {
-      const details = result.details as { agent?: string; model?: string; summary?: string; reportPath?: string; activity?: string[] } | undefined;
+      const details: SubagentDetails | undefined = result.details;
       const icon = isPartial ? theme.fg("warning", "⏳") : isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
       const title = `${icon} ${theme.fg("toolTitle", theme.bold(details?.agent ?? "agent"))}${details?.model ? theme.fg("muted", ` ${details.model}`) : ""}`;
       const took = !isPartial && durationMs !== undefined ? `${(durationMs / 1000).toFixed(1)}s` : "";
@@ -124,8 +128,9 @@ export default function (pi: ExtensionAPI) {
       if (active) throw new Error("serial_subagent is busy: a child is still running or cleaning up");
       if (shuttingDown) throw new Error("serial_subagent session is shutting down");
       const role = roles[params.agent];
+      if (!role) throw new Error(`Unknown agent ${params.agent}`);
       const ref = params.model?.trim() || role.model;
-      const parts = ref ? splitModel(ref) : [ctx.model.provider, ctx.model.id];
+      const parts: [string, string] | undefined = ref ? splitModel(ref) : [ctx.model.provider, ctx.model.id];
       if (!parts) throw new Error(`model must be provider/id, got "${ref}"`);
       const childModel = ctx.modelRegistry.find(parts[0], parts[1]);
       if (!childModel) throw new Error(`Unknown model ${parts.join("/")}`);
@@ -158,7 +163,7 @@ export default function (pi: ExtensionAPI) {
             onUpdate?.({ content: [{ type: "text", text: activity.at(-1) ?? "Working…" }], details: { agent: params.agent, model: `${provider}/${model}`, summary, activity } });
           },
         });
-        return { content: [{ type: "text", text: report.text }], details: { agent: params.agent, model: `${provider}/${model}`, summary: formatUsage(report.usage, contextWindow), reportPath: report.reportPath } };
+        return { content: [{ type: "text", text: report.text }], details: { agent: params.agent, model: `${provider}/${model}`, summary: formatUsage(report.usage, contextWindow), ...(report.reportPath && { reportPath: report.reportPath }) } };
       } finally {
         signal?.removeEventListener("abort", abort);
         active = undefined;

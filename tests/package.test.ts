@@ -8,7 +8,7 @@ import { DefaultResourceLoader, SettingsManager, loadSkills, parseFrontmatter } 
 test("Pi discovers Janitor from the declared skill paths without warnings", () => {
   const pkg = JSON.parse(readFileSync("package.json", "utf8"));
   const { frontmatter } = parseFrontmatter(readFileSync("skills/janitor/SKILL.md", "utf8"));
-  assert.equal(frontmatter.name, "janitor");
+  assert.equal(frontmatter["name"], "janitor");
 
   const { skills, diagnostics } = loadSkills({
     cwd: process.cwd(),
@@ -34,7 +34,7 @@ test("actual Pi resource loader discovers the registered sequential extension in
   const result = loader.getExtensions();
   assert.deepEqual(result.errors, []);
   assert.equal(result.extensions.length, 1);
-  const tools = result.extensions[0].tools;
+  const tools = result.extensions[0]!.tools;
   assert.deepEqual([...tools.keys()], ["serial_subagent"]);
   assert.equal(tools.get("serial_subagent")!.definition.executionMode, "sequential");
   assert.equal(tools.get("serial_subagent")!.definition.exposure, "model-only");
