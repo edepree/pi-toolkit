@@ -1,6 +1,6 @@
 # pi-toolkit
 
-A [Pi package](https://github.com/earendil-works/pi) with **Janitor**, a deletion-first cleanup skill, **Code Simplifier**, a behavior-preserving refinement skill, and **`serial_subagent`**, a blocking handoff to a worker or read-only reviewer.
+A [Pi package](https://github.com/earendil-works/pi) with **Janitor**, a deletion-first cleanup skill, **Code Simplifier**, a behavior-preserving refinement skill, **Lean Comments**, a minimal-commentary skill, and **`serial_subagent`**, a blocking handoff to a worker or read-only reviewer.
 
 > **Security:** This is context isolation, not a sandbox. Child extensions are disabled, so parent permission/sandbox extensions are **not inherited**. Workers have your full filesystem and shell privileges. Serialization is per Pi session, not server-wide. Linux (`/proc`) and a Node-installed Pi only.
 
@@ -28,6 +28,14 @@ Say what's in scope and whether you want recommendations or edits. This is guida
 ```
 
 By default it refines only uncommitted changes, following the project's own conventions. It runs checks before and after, and it doesn't delete features or dependencies (use Janitor for that).
+
+## Lean Comments
+
+```text
+/skill:lean-comments Audit comments in src/; do not edit yet.
+```
+
+Defaults to no comment unless it preserves non-obvious information the code can't show.
 
 ## serial_subagent
 

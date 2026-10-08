@@ -45,6 +45,15 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## Lean Comments skill
+
+`skills/lean-comments/SKILL.md` is copied unmodified from **lean-comments** in
+[GitHub Awesome Copilot](https://github.com/github/awesome-copilot).
+
+- Source: [`skills/lean-comments/SKILL.md`](https://github.com/github/awesome-copilot/blob/7cce7cfb4b61196c36d7e8eb8475ae84b356b126/skills/lean-comments/SKILL.md)
+- License: MIT, same upstream license as the Janitor skill above.
+- Upstream revision: `7cce7cfb4b61196c36d7e8eb8475ae84b356b126`
+
 ## Code Simplifier skill
 
 `skills/code-simplifier/SKILL.md` is adapted from Anthropic's **code-simplifier**

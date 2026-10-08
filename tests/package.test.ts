@@ -17,7 +17,7 @@ test("Pi discovers Janitor from the declared skill paths without warnings", () =
     includeDefaults: false,
   });
   assert.deepEqual(diagnostics, []);
-  assert.deepEqual(skills.map((skill) => skill.name), ["code-simplifier", "janitor"]);
+  assert.deepEqual(skills.map((skill) => skill.name), ["code-simplifier", "janitor", "lean-comments"]);
   assert.equal(skills.find(s => s.name === "janitor")!.filePath, resolve("skills/janitor/SKILL.md"));
   assert.equal(skills.every(s => !s.disableModelInvocation), true);
 });
