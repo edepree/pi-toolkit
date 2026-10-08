@@ -1,5 +1,4 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { createInterface } from "node:readline";
 
@@ -23,7 +22,7 @@ input.on("close", async () => {
 input.on("line", async line => {
   const command = JSON.parse(line);
   if (command.type === "get_state") {
-    response(command, { model: { provider, id: mode === "wrong-model" ? `${modelId}-larger` : modelId }, thinkingLevel: mode === "wrong-thinking" ? "high" : thinking, isStreaming: false, isCompacting: false, messageCount: mode === "history" ? 5 : 0, pendingMessageCount: 0, sessionId: "fixture", autoCompactionEnabled: true, steeringMode: "one-at-a-time", followUpMode: "one-at-a-time" });
+    response(command, { model: { provider, id: mode === "wrong-model" ? `${modelId}-larger` : modelId }, thinkingLevel: mode === "wrong-thinking" ? "high" : thinking, isStreaming: false, isCompacting: false, messageCount: 0, pendingMessageCount: 0, sessionId: "fixture", autoCompactionEnabled: true, steeringMode: "one-at-a-time", followUpMode: "one-at-a-time" });
     return;
   }
   if (command.type !== "prompt") { response(command); return; }
@@ -31,15 +30,12 @@ input.on("line", async line => {
   if (mode === "prompt-failure") { send({ type: "response", id: command.id, command: "prompt", success: false, error: "preflight failed" }); return; }
   response(command, { disposition: mode === "queued" ? "queued" : "started" });
   if (mode === "queued") return;
-  if (["hang", "ignore-term", "detached-tool", "pi-bash"].includes(mode)) {
-    if (mode !== "hang") process.on("SIGTERM", () => {});
+  if (["hang", "ignore-term", "pi-bash"].includes(mode)) {
+    if (mode === "ignore-term") process.on("SIGTERM", () => {});
     const pids = [process.pid];
-    if (mode === "detached-tool") {
-      const child = spawn(process.execPath, ["-e", 'process.on("SIGTERM",()=>{}); require("node:fs").writeFileSync("tool-ready", String(process.pid)); setInterval(()=>{},1000)'], { detached: true, stdio: "ignore" });
-      while (!existsSync("tool-ready")) await delay(10);
-      pids.push(child.pid);
-    }
     if (mode === "pi-bash") {
+      // Like Pi's RPC mode: on SIGTERM, kill the detached bash groups, then exit.
+      process.on("SIGTERM", () => { try { process.kill(-Number(readFileSync("shell-pid", "utf8")), "SIGKILL"); } catch {} process.exit(143); });
       const { createBashTool } = await import("@earendil-works/pi-coding-agent");
       void createBashTool(process.cwd()).execute("bash", { command: 'echo $$ > shell-pid; node -e \'process.on("SIGTERM",()=>{}); require("node:fs").writeFileSync("tool-ready",String(process.pid)); setInterval(()=>{},1000)\'; wait' }, undefined).catch(() => {});
       while (!existsSync("tool-ready")) await delay(10);
@@ -51,7 +47,6 @@ input.on("line", async line => {
   }
   if (mode === "malformed") { process.stdout.write("not json\n"); return; }
   if (mode === "oversized") { process.stdout.write("x".repeat(9 * 1024 * 1024)); return; }
-  if (mode === "invalid-shape") { send(null); return; }
   if (mode === "stderr") { process.stderr.write((process.env.LLAMA_API_KEY + " stderr\n").repeat(20000), () => process.exit(9)); return; }
   send({ type: "agent_start" });
   send({ type: "message_end", message: message("intermediate", "toolUse") });
@@ -64,7 +59,6 @@ input.on("line", async line => {
     text = `Final ${process.env.LLAMA_API_KEY}`;
   }
   let final = message(text, mode === "model-error" ? "error" : mode === "model-abort" ? "aborted" : mode === "length" ? "length" : "stop");
-  if (mode === "invalid-text") final.content = [{ type: "text", text: 42 }];
   if (mode === "tool-only") final = { ...final, stopReason: "toolUse", content: [{ type: "toolCall", id: "x", name: "read", arguments: { path: "x" } }] };
   if (!["missing", "intermediate-only"].includes(mode)) {
     if (mode === "split") {

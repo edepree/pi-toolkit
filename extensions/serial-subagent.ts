@@ -4,7 +4,7 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, getPackageDir, getMar
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { StringEnum, clampThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { runChild, type ChildUsage } from "../lib/run-child.ts";
+import { ChildError, runChild, type ChildStats } from "../lib/run-child.ts";
 
 function formatTokens(count: number): string {
   if (count < 1000) return count.toString();
@@ -13,18 +13,18 @@ function formatTokens(count: number): string {
   return `${(count / 1000000).toFixed(1)}M`;
 }
 
-function formatUsage(usage: ChildUsage, contextWindow: number): string {
+function formatUsage({ usage, turns, contextTokens }: ChildStats, contextWindow: number): string {
   const parts: string[] = [];
-  if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
+  if (turns) parts.push(`${turns} turn${turns > 1 ? "s" : ""}`);
   if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
   if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
   if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
   if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
-  if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
-  if (usage.contextTokens > 0 && contextWindow > 0) {
-    const pct = Math.min(100, (usage.contextTokens / contextWindow) * 100);
+  if (usage.cost.total) parts.push(`$${usage.cost.total.toFixed(4)}`);
+  if (contextTokens > 0 && contextWindow > 0) {
+    const pct = Math.min(100, (contextTokens / contextWindow) * 100);
     const filled = Math.round((pct / 100) * 16);
-    parts.push(`ctx:${formatTokens(usage.contextTokens)}/${formatTokens(contextWindow)}`, `${pct.toFixed(1)}% [${"█".repeat(filled)}${"░".repeat(16 - filled)}]`);
+    parts.push(`ctx:${formatTokens(contextTokens)}/${formatTokens(contextWindow)}`, `${pct.toFixed(1)}% [${"█".repeat(filled)}${"░".repeat(16 - filled)}]`);
   }
   return parts.join(" ");
 }
@@ -85,7 +85,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool<typeof parameters, SubagentDetails>({
     name: "serial_subagent",
     label: "Serial subagent",
-    description: `Run one blocking agent in a fresh Pi process. Agents: ${agentList}. Linux only. Child extensions (including permission extensions) are disabled: not a sandbox. Output is limited to ${formatSize(DEFAULT_MAX_BYTES)}/${DEFAULT_MAX_LINES} lines; when truncated, the full report is saved to a private file and its path is returned.`,
+    description: `Run one blocking agent in a fresh Pi process. Agents: ${agentList}. Not supported on Windows. Child extensions (including permission extensions) are disabled: not a sandbox. Output is limited to ${formatSize(DEFAULT_MAX_BYTES)}/${DEFAULT_MAX_LINES} lines; when truncated, the full report is saved to a private file and its path is returned.`,
     promptSnippet: "Delegate a self-contained task, blocking until the child exits",
     promptGuidelines: [
       "Give serial_subagent a self-contained task with objectives, relevant paths, constraints and completion criteria; no parent conversation is copied.",
@@ -143,12 +143,10 @@ export default function (pi: ExtensionAPI) {
       // --no-extensions also drops built-ins since Pi 0.99; llama.cpp is a built-in provider.
       const builtins = provider === "llama.cpp" ? ["-e", "builtin:llama.cpp"] : [];
       const controller = new AbortController();
-      let complete!: () => void;
-      active = { controller, done: new Promise<void>(resolve => { complete = resolve; }) };
-      const abort = () => controller.abort();
-      signal?.addEventListener("abort", abort, { once: true });
+      const { promise: done, resolve: complete } = Promise.withResolvers<void>();
+      active = { controller, done };
+      const details = { agent: params.agent, model: `${provider}/${model}` };
       try {
-        if (signal?.aborted) abort();
         const report = await runChild({
           command: process.execPath,
           args: [piCommand(), "--mode", "rpc", "--no-session", "--no-extensions", "--no-prompt-templates", ...builtins,
@@ -157,15 +155,17 @@ export default function (pi: ExtensionAPI) {
           cwd: ctx.cwd,
           prompt: `Task: ${params.task}`,
           expected: { provider, model, thinkingLevel },
-          signal: controller.signal,
-          onProgress: ({ usage, activity }) => {
-            const summary = formatUsage(usage, contextWindow);
-            onUpdate?.({ content: [{ type: "text", text: activity.at(-1) ?? "Working…" }], details: { agent: params.agent, model: `${provider}/${model}`, summary, activity } });
+          signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
+          onProgress: ({ stats, activity }) => {
+            onUpdate?.({ content: [{ type: "text", text: activity.at(-1) ?? "Working…" }], details: { ...details, summary: formatUsage(stats, contextWindow), activity } });
           },
         });
-        return { content: [{ type: "text", text: report.text }], details: { agent: params.agent, model: `${provider}/${model}`, summary: formatUsage(report.usage, contextWindow), ...(report.reportPath && { reportPath: report.reportPath }) } };
+        return { content: [{ type: "text", text: report.text }], details: { ...details, summary: formatUsage(report.stats, contextWindow), ...(report.reportPath && { reportPath: report.reportPath }) }, usage: report.stats.usage };
+      } catch (error) {
+        if (!(error instanceof ChildError)) throw error;
+        // Returned rather than thrown so the child's spend still counts toward session totals.
+        return { content: [{ type: "text", text: error.message }], details: { ...details, summary: formatUsage(error.stats, contextWindow) }, usage: error.stats.usage, isError: true };
       } finally {
-        signal?.removeEventListener("abort", abort);
         active = undefined;
         complete();
       }

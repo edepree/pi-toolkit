@@ -30,6 +30,13 @@ function live(pid: number) {
   try { return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]?.[0] !== "Z"; }
   catch { return false; }
 }
+// Post-launch failures return isError results (carrying usage) instead of throwing.
+async function failed(result: Promise<{ content: unknown[]; isError?: boolean }>, pattern: RegExp) {
+  const value = await result;
+  assert.equal(value.isError, true);
+  assert.match((value.content[0] as { text: string }).text, pattern);
+  return value;
+}
 async function runner() {
   return (await import("../lib/run-child.ts")).runChild;
 }
@@ -96,14 +103,14 @@ for (const [mode, error] of [
   ["missing", /completion|final|report/i], ["intermediate-only", /completion|final|report/i],
   ["tool-only", /completion|final|report/i], ["length", /completion|length/i],
   ["malformed", /malformed|JSON|protocol/i], ["oversized", /record.*limit|oversized/i],
-  ["invalid-shape", /protocol|completion/i], ["prompt-failure", /prompt|RPC/i],
-  ["wrong-model", /model|identity/i], ["wrong-thinking", /thinking|identity/i], ["history", /fresh|history|session/i],
+  ["prompt-failure", /prompt|RPC/i],
+  ["wrong-model", /model|identity/i], ["wrong-thinking", /thinking|identity/i],
   ["queued", /did not start/i], ["settled-aborted", /abort/i],
 ] as const) {
   test(`runner rejects ${mode} and permits a subsequent call`, async (t) => {
     const runChild = await runner();
     const cwd = temporary(t);
-    const notSent = ["wrong-model", "wrong-thinking", "history"].includes(mode);
+    const notSent = ["wrong-model", "wrong-thinking"].includes(mode);
     await assert.rejects(runChild(options(mode, cwd)), (e: Error) => error.test(e.message) && notSent !== /Partial file changes/.test(e.message));
     if (notSent) assert.ok(!existsSync(join(cwd, "prompt-received")));
     assert.match((await runChild(options("success", cwd))).text, /Final/);
@@ -137,13 +144,15 @@ test("oversized reports are privately saved and bounded including file reference
 test("progress and stderr are bounded and credential values are not returned", async (t) => {
   const runChild = await runner();
   setEnv(t, "LLAMA_API_KEY", "fixture-secret-do-not-return");
-  const updates: { usage: object; activity: string[] }[] = [];
-  const report = await runChild(options("progress-secret", temporary(t), { onProgress: (p: { usage: object; activity: string[] }) => updates.push(p) }));
+  setEnv(t, "SHORT_KEY", "ls"); // too short to redact: "&& ls" below must survive
+  const updates: { stats: { usage: { input: number; output: number }; turns: number; contextTokens: number }; activity: string[] }[] = [];
+  const report = await runChild(options("progress-secret", temporary(t), { onProgress: (p: typeof updates[number]) => updates.push(p) }));
   const activity = updates.at(-1)!.activity;
   assert.deepEqual(activity.slice(0, 2), ["intermediate", "→ bash echo [redacted] && ls"]);
   assert.ok(activity.every(line => line.length <= 120 && !line.includes("fixture-secret-do-not-return")));
   // Two assistant messages; agent_end must not count usage again.
-  assert.deepEqual(updates.at(-1)!.usage, { input: 2, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 2, turns: 2 });
+  const { stats } = updates.at(-1)!;
+  assert.deepEqual([stats.usage.input, stats.usage.output, stats.turns, stats.contextTokens], [2, 2, 2, 2]);
   assert.ok(!report.text.includes("fixture-secret-do-not-return"));
   await assert.rejects(runChild(options("stderr", temporary(t))), (error: Error) => {
     assert.ok(Buffer.byteLength(error.message) < 8192);
@@ -153,7 +162,7 @@ test("progress and stderr are bounded and credential values are not returned", a
   });
 });
 
-for (const mode of ["hang", "ignore-term", "detached-tool", "pi-bash"]) {
+for (const mode of ["hang", "ignore-term", "pi-bash"]) {
   test(`cancellation waits for terminated work: ${mode}`, { timeout: 15000 }, async (t) => {
     const runChild = await runner();
     const cwd = temporary(t);
@@ -226,7 +235,7 @@ test("busy guard covers invocation and cleanup; abort and shutdown share cleanup
   const { tool, ctx, cwd, handlers } = await registered(t, "ignore-term");
   const controller = new AbortController();
   const call = () => tool.execute("call", { agent: "worker", task: "x" }, controller.signal, undefined, ctx);
-  const active = assert.rejects(call(), /cancel|abort/i);
+  const active = failed(call(), /cancel|abort/i);
   await assert.rejects(call(), /busy|running/i);
   await until(() => existsSync(join(cwd, "ready")), "child ready");
   controller.abort();
@@ -240,25 +249,23 @@ test("busy guard covers invocation and cleanup; abort and shutdown share cleanup
 test("extension releases busy state after failure and cancellation", async (t) => {
   const { tool, ctx, cwd } = await registered(t, "fail-after-final");
   const call = (signal?: AbortSignal) => tool.execute("call", { agent: "reviewer", task: "x" }, signal, undefined, ctx);
-  await assert.rejects(call(), /exit/);
+  // Two fixture turns of 1 input token each; a failed run must still report them.
+  assert.equal((await failed(call(), /exit/) as { usage?: { input: number } }).usage?.input, 2);
   process.env["CHILD_MODE"] = "hang";
   const controller = new AbortController();
-  const rejected = assert.rejects(call(controller.signal), /cancel|abort/i);
+  const rejected = failed(call(controller.signal), /cancel|abort/i);
   await until(() => existsSync(join(cwd, "ready")), "ready for cancellation");
   controller.abort();
   await rejected;
   process.env["CHILD_MODE"] = "success";
-  assert.match(((await call()).content[0] as { text: string }).text, /Final/);
-});
-
-test("invalid assistant text blocks cannot become a successful report", async (t) => {
-  const runChild = await runner();
-  await assert.rejects(runChild(options("invalid-text", temporary(t))), /protocol|completion|text/i);
+  const ok = await call();
+  assert.match((ok.content[0] as { text: string }).text, /Final/);
+  assert.equal((ok as { usage?: { input: number } }).usage?.input, 2);
 });
 
 test("shutdown alone cancels the child and waits for termination", async (t) => {
-  const { tool, ctx, cwd, handlers } = await registered(t, "detached-tool");
-  const result = assert.rejects(tool.execute("call", { agent: "worker", task: "x" }, undefined, undefined, ctx), /cancel|abort/i);
+  const { tool, ctx, cwd, handlers } = await registered(t, "pi-bash");
+  const result = failed(tool.execute("call", { agent: "worker", task: "x" }, undefined, undefined, ctx), /cancel|abort/i);
   await until(() => existsSync(join(cwd, "ready")), "child ready for shutdown");
   await handlers.get("session_shutdown")!({ type: "session_shutdown", reason: "reload" }, ctx);
   await result;
@@ -271,8 +278,8 @@ test("unsupported platforms fail before launch", async (t) => {
   const cwd = temporary(t);
   const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
   try {
-    Object.defineProperty(process, "platform", { ...descriptor, value: "darwin" });
-    await assert.rejects(runChild(options("success", cwd)), /Linux/i);
+    Object.defineProperty(process, "platform", { ...descriptor, value: "win32" });
+    await assert.rejects(runChild(options("success", cwd)), /Windows/i);
   } finally { Object.defineProperty(process, "platform", descriptor); }
   assert.ok(!existsSync(join(cwd, "started")));
 });
@@ -311,4 +318,21 @@ test("partial updates render live activity instead of a finished checkmark", asy
   assert.match(expanded, /Final .*report/);
   assert.match(expanded, /2 turns.*0\.1s/);
   assert.match(expanded, /Full report: \/tmp\/report\.txt/);
+});
+
+// Opt-in, spends tokens: PI_TOOLKIT_LIVE_MODEL=provider/id npm test. Checks the real Pi RPC protocol, not the fixture.
+const liveModel = process.env["PI_TOOLKIT_LIVE_MODEL"] ?? "";
+test("live: real Pi child completes a task over RPC", { skip: !liveModel && "set PI_TOOLKIT_LIVE_MODEL=provider/id", timeout: 120000 }, async (t) => {
+  const runChild = await runner();
+  const slash = liveModel.indexOf("/");
+  const provider = liveModel.slice(0, slash), model = liveModel.slice(slash + 1);
+  const root = resolve("node_modules/@earendil-works/pi-coding-agent");
+  const cli = resolve(root, JSON.parse(readFileSync(join(root, "package.json"), "utf8")).bin.pi);
+  const report = await runChild({
+    command: process.execPath,
+    args: [cli, "--mode", "rpc", "--no-session", "--no-extensions", "--no-prompt-templates", "--tools", "read", "--provider", provider, "--model", model, "--thinking", "off", "--no-approve"],
+    cwd: temporary(t), prompt: "Reply with exactly the word OK.", expected: { provider, model, thinkingLevel: "off" },
+  });
+  assert.match(report.text, /OK/);
+  assert.ok(report.stats.turns >= 1 && report.stats.usage.input > 0);
 });

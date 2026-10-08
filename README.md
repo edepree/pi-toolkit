@@ -2,7 +2,7 @@
 
 A [Pi package](https://github.com/earendil-works/pi) with **Janitor**, a deletion-first cleanup skill, **Code Simplifier**, a behavior-preserving refinement skill, **Lean Comments**, a minimal-commentary skill, and **`serial_subagent`**, a blocking handoff to a worker or read-only reviewer.
 
-> **Security:** This is context isolation, not a sandbox. Child extensions are disabled, so parent permission/sandbox extensions are **not inherited**. Workers have your full filesystem and shell privileges. Serialization is per Pi session, not server-wide. Linux (`/proc`) and a Node-installed Pi only.
+> **Security:** This is context isolation, not a sandbox. Child extensions are disabled, so parent permission/sandbox extensions are **not inherited**. Workers have your full filesystem and shell privileges. Serialization is per Pi session, not server-wide. POSIX (Linux, macOS) and a Node-installed Pi only; Windows is unsupported.
 
 ## Install
 
@@ -52,13 +52,14 @@ Typical flow: `parent → worker → parent → reviewer → parent`. The review
 Behavior:
 
 - Each call starts a fresh `pi --mode rpc --no-session --no-extensions` child in the parent's cwd, with the selected model, the parent's thinking level, environment and project trust. `--no-extensions` also disables Pi's built-in extensions (MCP, codemode, tool search); only `builtin:llama.cpp` is loaded, and only when the child's provider is `llama.cpp`.
-- The task is sent over stdin only after `get_state` confirms the exact model, thinking level and a fresh session. A mismatch fails before any inference. The run must report `disposition: "started"` and must not settle as `aborted`.
+- The task is sent over stdin only after `get_state` confirms the exact model and thinking level. A mismatch fails before any inference. The run must report `disposition: "started"` and must not settle as `aborted`.
 - The tool is `model-only`: codemode scripts can't call it, so the model can't fan it out in parallel.
-- Cancellation or session shutdown sends SIGTERM to the child's process group, waits briefly, then sends SIGKILL to any remaining descendants. Another call can't start until they have exited.
+- Cancellation or session shutdown sends SIGTERM to the child's process group; the child Pi then kills the bash processes it started. If the child hasn't exited after 500 ms, its process group gets SIGKILL, and bash processes a hung child started may survive. Another call can't start until the child has exited.
 - Startup has a timeout. The task itself has none; cancel it if needed.
-- Failures return an error. **Partial edits remain**: there's no rollback or retry.
+- Failures return an error result. **Partial edits remain**: there's no rollback or retry.
+- The child's token usage and cost, including failed or cancelled runs, are returned as the tool result's `usage`, so they count toward the session totals.
 - While running, the tool row shows ⏳, the child model, token usage, and the child's latest tool calls and notes (redacted, one line each). Only the final assistant report is returned. If it exceeds Pi's default tool output limit, it's truncated and the full report is saved to a private temp file whose path is in the result.
-- Values of environment variables that look like credentials are redacted from output.
+- Values (8+ characters) of environment variables that look like credentials are redacted from output.
 
 For llama.cpp, configure it with `/login llama.cpp` or `LLAMA_BASE_URL` (and optionally `LLAMA_API_KEY`); the child inherits both. The child only sees models Pi knows at startup, so a new Pi agent directory may need one normal session to populate `models-store.json` first. Virtual models (`pi.registerVirtualModel()`) live in extensions, so the child can't use them (they fail before launch), nor models from providers that extensions register; pick a physical, built-in or `models.json` model instead.
 
@@ -69,6 +70,8 @@ Tested with the Pi version in `package.json` `devDependencies` and Node 26. Node
 ```bash
 npm ci --ignore-scripts && npm test && npm run check
 ```
+
+The tests use a fake child. To also check the real Pi RPC protocol (this spends a few tokens), run `PI_TOOLKIT_LIVE_MODEL=provider/id npm test`.
 
 ## Attribution
 

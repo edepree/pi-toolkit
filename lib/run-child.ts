@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -8,7 +8,7 @@ import {
   DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateHead, truncateTail,
   type ExtensionContext, type RpcCommand, type RpcResponse, type JsonAgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 
 export interface ChildOptions {
   command: string;
@@ -21,92 +21,51 @@ export interface ChildOptions {
   onProgress?: (progress: ChildProgress) => void;
 }
 // activity: the latest redacted one-line notes (tool calls, assistant text).
-export interface ChildProgress { usage: ChildUsage; activity: string[] }
-export interface ChildUsage {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cost: number;
-  contextTokens: number;
-  turns: number;
+export interface ChildProgress { stats: ChildStats; activity: string[] }
+// usage: summed over all child turns; contextTokens: the last turn's context size.
+export interface ChildStats { usage: Usage; turns: number; contextTokens: number }
+export interface ChildReport { text: string; reportPath?: string; stats: ChildStats }
+// Carries what the child spent before failing, so callers can still report it.
+export class ChildError extends Error {
+  stats: ChildStats;
+  constructor(message: string, stats: ChildStats) { super(message); this.stats = stats; }
 }
-export interface ChildReport { text: string; reportPath?: string; usage: ChildUsage }
 
 const MAX_RECORD_BYTES = 8 * 1024 * 1024;
 const TERMINATION_GRACE_MS = 500;
 const STARTUP_TIMEOUT_MS = 30_000;
 
-interface ProcessIdentity { pid: number; parent: number; group: number; start: string; state: string }
-function processIdentity(pid: number): ProcessIdentity | undefined {
-  try {
-    const raw = readFileSync(`/proc/${pid}/stat`, "utf8");
-    const fields = raw.slice(raw.lastIndexOf(")") + 2).split(" ");
-    const state = fields[0], start = fields[19];
-    if (state === undefined || start === undefined) throw new Error(`Unexpected /proc/${pid}/stat format`);
-    return { pid, state, parent: Number(fields[1]), group: Number(fields[2]), start };
-  } catch (error) {
-    if (["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) return undefined;
-    throw error;
-  }
-}
-function stillLive(identity: ProcessIdentity) {
-  const current = processIdentity(identity.pid);
-  return current?.start === identity.start && current.state !== "Z" && current.state !== "X";
-}
-// Pi's bash tool runs commands in their own detached process groups. Record
-// descendants before SIGTERM reparents them, and keep their start times so
-// SIGKILL cannot hit a reused PID.
-function discoverDescendants(owned: Map<number, ProcessIdentity>) {
-  const processes = readdirSync("/proc").filter(name => /^\d+$/.test(name)).map(name => processIdentity(Number(name))).filter(p => p !== undefined);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const child of processes) {
-      const parent = owned.get(child.parent);
-      if (!owned.has(child.pid) && parent && stillLive(parent)) {
-        owned.set(child.pid, child);
-        changed = true;
-      }
-    }
-  }
-}
-function signalOwned(identity: ProcessIdentity, signal: NodeJS.Signals, group = false) {
-  if (!stillLive(identity)) return;
-  try { process.kill(group ? -identity.group : identity.pid, signal); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
-}
-
 function redactor() {
   const secrets = Object.entries(process.env)
-    // LLAMA_BASE_URL may embed credentials (https://user:pass@host).
-    .filter(([name, value]) => value && (/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i.test(name) || name === "LLAMA_BASE_URL"))
+    // Short values like "1" would redact ordinary output. LLAMA_BASE_URL may embed credentials (https://user:pass@host).
+    .filter(([name, value]) => value && value.length >= 8 && (/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i.test(name) || name === "LLAMA_BASE_URL"))
     .map(([, value]) => value!).sort((a, b) => b.length - a.length);
   return (text: string) => {
     for (const secret of secrets) text = text.replaceAll(secret, "[redacted]");
     return text;
   };
 }
-function saveReport(text: string, usage: ChildUsage): ChildReport {
-  if (!truncateHead(text).truncated) return { text, usage };
+function saveReport(text: string, stats: ChildStats): ChildReport {
+  if (!truncateHead(text).truncated) return { text, stats };
   const dir = mkdtempSync(join(tmpdir(), "pi-toolkit-report-"));
   const reportPath = join(dir, "report.txt");
   try { writeFileSync(reportPath, text, { mode: 0o600 }); }
   catch (error) { rmSync(dir, { recursive: true, force: true }); throw error; }
   const suffix = `\n\n[Output truncated. Full report: ${reportPath}]`;
   const preview = truncateHead(text, { maxBytes: DEFAULT_MAX_BYTES - Buffer.byteLength(suffix), maxLines: DEFAULT_MAX_LINES - 3 });
-  return { text: preview.content + suffix, reportPath, usage };
+  return { text: preview.content + suffix, reportPath, stats };
 }
 
 export async function runChild(options: ChildOptions): Promise<ChildReport> {
-  if (process.platform !== "linux") throw new Error("serial_subagent requires Linux /proc for child lifecycle cleanup");
+  if (process.platform === "win32") throw new Error("serial_subagent needs POSIX process groups; Windows is unsupported");
   if (options.signal?.aborted) throw new Error("Child cancelled before launch");
-  if (!processIdentity(process.pid)) throw new Error("Linux /proc is unavailable");
   const redact = redactor();
   const proc = spawn(options.command, options.args, { cwd: options.cwd, env: process.env, shell: false, detached: true, stdio: ["pipe", "pipe", "pipe"] });
-  const owned = new Map<number, ProcessIdentity>();
-  const root = proc.pid ? processIdentity(proc.pid) : undefined;
-  if (root) owned.set(root.pid, root);
+  let closed = false;
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
+    proc.once("error", () => { failure ??= "Child launch/spawn failed"; });
+    proc.once("close", (code, signal) => { closed = true; resolve({ code, signal }); });
+  });
   let failure: string | undefined;
   let stopping: Promise<void> | undefined;
   let stderr = "";
@@ -116,68 +75,61 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
   let phase = "state" as "state" | "prompt" | "running" | "settled";
   let final: AssistantMessage | undefined;
   let ended = false;
-  const usage: ChildUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
+  const stats: ChildStats = {
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    turns: 0,
+    contextTokens: 0,
+  };
   let startupTimer: NodeJS.Timeout | undefined;
   let exitTimer: NodeJS.Timeout | undefined;
 
   const stop = () => {
     if (stopping) return;
     stopping = (async () => {
-      discoverDescendants(owned);
-      // SIGTERM first so Pi can stop its own detached bash processes.
-      if (root) signalOwned(root, "SIGTERM", true);
-      const deadline = Date.now() + TERMINATION_GRACE_MS;
-      while ([...owned.values()].some(stillLive)) {
-        discoverDescendants(owned);
-        if (Date.now() >= deadline) {
-          for (const identity of owned.values()) {
-            // Signal a whole group only when we own its leader, never a parent or shared group.
-            signalOwned(identity, "SIGKILL", identity.group === identity.pid);
-          }
-        }
-        await delay(20);
-      }
+      // Pi's RPC SIGTERM handler kills the detached bash process trees it started.
+      // ponytail: a child that ignores SIGTERM leaves those bash groups running; track descendants if that bites.
+      signalGroup("SIGTERM");
+      await Promise.race([exited, delay(TERMINATION_GRACE_MS)]);
+      if (!closed) signalGroup("SIGKILL");
     })();
     // The try block awaits this later; the catch prevents an unhandled rejection before then.
     void stopping.catch(() => {});
+  };
+  const signalGroup = (signal: NodeJS.Signals) => {
+    if (!proc.pid) return;
+    try { process.kill(-proc.pid, signal); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
   };
   const fail = (message: string) => { failure ??= message; stop(); };
   const abort = () => fail("Child cancelled; partial file changes may remain");
   const send = (command: RpcCommand) => proc.stdin.write(JSON.stringify(command) + "\n");
   const readAssistant = (message: AssistantMessage) => {
-    if (!Array.isArray(message.content) || typeof message.stopReason !== "string" || message.content.some(part => !part || typeof part.type !== "string" || (part.type === "text" && typeof part.text !== "string"))) throw new Error("Invalid assistant completion protocol");
     if (message.provider !== options.expected.provider || message.model !== options.expected.model) throw new Error("Child model identity changed");
     if (message.stopReason === "error" || message.stopReason === "aborted") throw new Error(`Child model ${message.stopReason}`);
     final = message;
   };
   // Count usage on message_end only; agent_end repeats the final message.
   const addUsage = ({ usage: u }: AssistantMessage) => {
-    if (!u) return;
-    usage.input += u.input || 0;
-    usage.output += u.output || 0;
-    usage.cacheRead += u.cacheRead || 0;
-    usage.cacheWrite += u.cacheWrite || 0;
-    usage.cost += u.cost?.total || 0;
-    usage.contextTokens = u.totalTokens || 0;
-    usage.turns++;
+    for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) stats.usage[key] += u[key];
+    for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) stats.usage.cost[key] += u.cost[key];
+    stats.contextTokens = u.totalTokens;
+    stats.turns++;
   };
   const activity: string[] = [];
   const progress = (line?: string) => {
     if (line) activity.push(redact(line).replace(/\s+/g, " ").trim().slice(0, 120));
     if (activity.length > 5) activity.shift();
-    options.onProgress?.({ usage: { ...usage }, activity: [...activity] });
+    options.onProgress?.({ stats: structuredClone(stats), activity: [...activity] });
   };
   const handle = (line: string) => {
     if (!line.trim() || failure) return;
     let event: RpcResponse | JsonAgentSessionEvent;
     try { event = JSON.parse(line); } catch { throw new Error("Malformed child JSON protocol record"); }
-    if (!event || typeof event !== "object" || typeof event.type !== "string") throw new Error("Invalid child protocol record");
     if (event.type === "response") {
       if (!event.success) throw new Error("Child RPC command failed (diagnostic content withheld)");
       if (event.id === "identity" && event.command === "get_state" && phase === "state") {
         const state = event.data;
         if (state?.model?.provider !== options.expected.provider || state.model.id !== options.expected.model || state.thinkingLevel !== options.expected.thinkingLevel) throw new Error("Child model/thinking identity mismatch; task not sent");
-        if (state.sessionFile || state.messageCount !== 0 || state.pendingMessageCount !== 0 || state.isStreaming !== false || state.isCompacting !== false) throw new Error("Child session is not fresh and idle; task not sent");
         phase = "prompt";
         send({ type: "prompt", id: "task", message: options.prompt });
       } else if (event.id === "task" && event.command === "prompt" && phase === "prompt") {
@@ -195,7 +147,6 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
       ended = false;
       final = undefined;
     } else if (event.type === "agent_end") {
-      if (!Array.isArray(event.messages)) throw new Error("Invalid agent completion protocol");
       const last = event.messages.at(-1);
       if (last?.role !== "assistant") throw new Error("Missing final assistant report");
       readAssistant(last);
@@ -241,10 +192,6 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
   proc.stderr.on("data", stderrData);
   proc.stdin.on("error", stdinError);
   options.signal?.addEventListener("abort", abort, { once: true });
-  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
-    proc.once("error", () => { failure ??= "Child launch/spawn failed"; });
-    proc.once("close", (code, signal) => resolve({ code, signal }));
-  });
   try {
     startupTimer = setTimeout(() => fail("Child RPC startup timed out"), STARTUP_TIMEOUT_MS);
     send({ type: "get_state", id: "identity" });
@@ -255,10 +202,10 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
     if (phase !== "settled" || !final) throw new Error("Child exited without final completion");
     const text = final.content.filter(part => part.type === "text").map(part => part.text).join("\n");
     if (!text.trim()) throw new Error("Child final report is empty");
-    return saveReport(redact(text), usage);
+    return saveReport(redact(text), stats);
   } catch (error) {
     const note = phase === "state" ? "" : "\nPartial file changes may remain; no rollback or retry was performed.";
-    throw new Error(redact((error as Error).message) + note);
+    throw new ChildError(redact((error as Error).message) + note, stats);
   } finally {
     clearTimeout(startupTimer);
     clearTimeout(exitTimer);
