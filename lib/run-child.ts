@@ -179,6 +179,8 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
         phase = "prompt";
         send({ type: "prompt", id: "task", message: options.prompt });
       } else if (event.id === "task" && event.command === "prompt" && phase === "prompt") {
+        // "queued" or "handled" (e.g. consumed by an input hook) means no run will report back.
+        if (event.data?.disposition !== "started") throw new Error("Child did not start the task");
         phase = "running";
         clearTimeout(startupTimer);
       } else throw new Error("Unexpected child RPC response");
@@ -197,6 +199,7 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
       readAssistant(last);
       ended = true;
     } else if (event.type === "agent_settled") {
+      if (event.aborted) throw new Error("Child run aborted");
       if (phase !== "running" || !ended || !final || final.stopReason !== "stop" || final.content.some(part => part.type === "toolCall")) throw new Error("Missing or invalid final completion report");
       phase = "settled";
       proc.stdin.end(); // On stdin EOF, Pi RPC mode shuts down and exits 0.

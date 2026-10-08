@@ -37,4 +37,5 @@ test("actual Pi resource loader discovers the registered sequential extension in
   const tools = result.extensions[0].tools;
   assert.deepEqual([...tools.keys()], ["serial_subagent"]);
   assert.equal(tools.get("serial_subagent")!.definition.executionMode, "sequential");
+  assert.equal(tools.get("serial_subagent")!.definition.exposure, "model-only");
 });

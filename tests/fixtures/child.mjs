@@ -6,8 +6,10 @@ import { createInterface } from "node:readline";
 const mode = process.env.CHILD_MODE || process.argv[2];
 writeFileSync("started", String(process.pid));
 writeFileSync("launch.json", JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), env: process.env.TOOLKIT_ENV_SENTINEL }));
+const flag = (name, fallback) => process.argv.includes(name) ? process.argv[process.argv.indexOf(name) + 1] : fallback;
+const provider = flag("--provider", "fixture"), modelId = flag("--model", "exact-model"), thinking = flag("--thinking", "off");
 const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
-const message = (text, stopReason = "stop") => ({ role: "assistant", content: [{ type: "text", text }], api: "openai-completions", provider: "fixture", model: "exact-model", usage, stopReason, timestamp: Date.now() });
+const message = (text, stopReason = "stop") => ({ role: "assistant", content: [{ type: "text", text }], api: "openai-completions", provider, model: modelId, usage, stopReason, timestamp: Date.now() });
 const send = (event) => process.stdout.write(JSON.stringify(event) + "\n");
 const response = (command, data) => send({ type: "response", id: command.id, command: command.type, success: true, ...(data && { data }) });
 const input = createInterface({ input: process.stdin }); // JSON escapes newlines, so each line is one command.
@@ -21,13 +23,14 @@ input.on("close", async () => {
 input.on("line", async line => {
   const command = JSON.parse(line);
   if (command.type === "get_state") {
-    response(command, { model: { provider: "fixture", id: mode === "wrong-model" ? "exact-model-larger" : "exact-model" }, thinkingLevel: mode === "wrong-thinking" ? "high" : "off", isStreaming: false, isCompacting: false, messageCount: mode === "history" ? 5 : 0, pendingMessageCount: 0, sessionId: "fixture", autoCompactionEnabled: true, steeringMode: "one-at-a-time", followUpMode: "one-at-a-time" });
+    response(command, { model: { provider, id: mode === "wrong-model" ? `${modelId}-larger` : modelId }, thinkingLevel: mode === "wrong-thinking" ? "high" : thinking, isStreaming: false, isCompacting: false, messageCount: mode === "history" ? 5 : 0, pendingMessageCount: 0, sessionId: "fixture", autoCompactionEnabled: true, steeringMode: "one-at-a-time", followUpMode: "one-at-a-time" });
     return;
   }
   if (command.type !== "prompt") { response(command); return; }
   writeFileSync("prompt-received", command.message);
   if (mode === "prompt-failure") { send({ type: "response", id: command.id, command: "prompt", success: false, error: "preflight failed" }); return; }
-  response(command);
+  response(command, { disposition: mode === "queued" ? "queued" : "started" });
+  if (mode === "queued") return;
   if (["hang", "ignore-term", "detached-tool", "pi-bash"].includes(mode)) {
     if (mode !== "hang") process.on("SIGTERM", () => {});
     const pids = [process.pid];
@@ -73,5 +76,5 @@ input.on("line", async line => {
   send({ type: "agent_end", messages: mode === "missing" ? [] : [final] });
   // The runner treats agent_settled, not agent_end, as completion.
   await delay(1);
-  send({ type: "agent_settled" });
+  send({ type: "agent_settled", aborted: mode === "settled-aborted" });
 });

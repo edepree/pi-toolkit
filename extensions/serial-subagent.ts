@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, getPackageDir, getMarkdownTheme, parseFrontmatter, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import { StringEnum } from "@earendil-works/pi-ai";
+import { StringEnum, clampThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { runChild, type ChildUsage } from "../lib/run-child.ts";
 
@@ -29,16 +29,23 @@ function formatUsage(usage: ChildUsage, contextWindow: number): string {
   return parts.join(" ");
 }
 
+// "provider/id"; the id may itself contain "/" (e.g. openrouter/anthropic/claude-x).
+function splitModel(ref: string): [string, string] | undefined {
+  const slash = ref.indexOf("/");
+  return slash > 0 && slash < ref.length - 1 ? [ref.slice(0, slash), ref.slice(slash + 1)] : undefined;
+}
+
 const agentsDir = resolve(import.meta.dirname, "../agents");
-interface Agent { name: string; description: string; tools: string; prompt: string }
+interface Agent { name: string; description: string; tools: string; model?: string; prompt: string }
 function loadAgent(file: string): Agent {
   const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(readFileSync(resolve(agentsDir, file), "utf8"));
-  const { name, description, tools } = frontmatter;
+  const { name, description, tools, model } = frontmatter;
   const prompt = body.trim();
   if (typeof name !== "string" || typeof description !== "string" || typeof tools !== "string" || !prompt) {
     throw new Error(`Invalid agent file ${file}: needs name, description, tools and a prompt body`);
   }
-  return { name, description, tools, prompt };
+  if (model !== undefined && !(typeof model === "string" && splitModel(model))) throw new Error(`Invalid agent file ${file}: model must be provider/id`);
+  return { name, description, tools, model: model as string | undefined, prompt };
 }
 const agentFiles = readdirSync(agentsDir).filter(file => file.endsWith(".md")).sort();
 const roles: Record<string, Agent> = {};
@@ -46,7 +53,7 @@ for (const agent of agentFiles.map(loadAgent)) {
   if (roles[agent.name]) throw new Error(`Duplicate agent name ${agent.name}`);
   roles[agent.name] = agent;
 }
-const agentList = Object.values(roles).map(agent => `${agent.name}: ${agent.description}`).join("; ");
+const agentList = Object.values(roles).map(agent => `${agent.name}: ${agent.description}${agent.model ? ` (default model ${agent.model})` : ""}`).join("; ");
 
 // Use the Pi CLI of the runtime that loaded this extension. process.argv[1]
 // can be an SDK host, test runner or wrapper, so it is not used.
@@ -76,15 +83,24 @@ export default function (pi: ExtensionAPI) {
       "Give serial_subagent a self-contained task with objectives, relevant paths, constraints and completion criteria; no parent conversation is copied.",
       `serial_subagent agents: ${agentList}.`,
       "serial_subagent runs one agent at a time. To chain agents, wait for each result and pass the evidence the next agent needs (such as the diff and test output) in its task.",
+      "serial_subagent model is optional (provider/id); it overrides the agent's default model, which otherwise falls back to your own model. Only configured models with credentials work.",
       "Do not use serial_subagent to bypass an explicit security restriction: child permission/sandbox extensions are not inherited. Serialization is session-local, not server-wide.",
     ],
-    parameters: Type.Object({ agent: StringEnum(Object.keys(roles)), task: Type.String({ minLength: 1 }) }),
+    parameters: Type.Object({
+      agent: StringEnum(Object.keys(roles)),
+      task: Type.String({ minLength: 1 }),
+      model: Type.Optional(Type.String({ description: "provider/id of the child model; defaults to the agent's model, then the parent's" })),
+    }),
+    // Orchestrates a whole child agent; codemode scripts must not fan it out.
+    exposure: "model-only",
 
-    renderResult(result, { expanded, isPartial }, theme, { isError }) {
-      const details = result.details as { agent?: string; summary?: string; reportPath?: string; activity?: string[] } | undefined;
+    renderResult(result, { expanded, isPartial }, theme, { isError, durationMs }) {
+      const details = result.details as { agent?: string; model?: string; summary?: string; reportPath?: string; activity?: string[] } | undefined;
       const icon = isPartial ? theme.fg("warning", "⏳") : isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
-      const title = `${icon} ${theme.fg("toolTitle", theme.bold(details?.agent ?? "agent"))}`;
-      const summary = details?.summary ? theme.fg("dim", details.summary) : "";
+      const title = `${icon} ${theme.fg("toolTitle", theme.bold(details?.agent ?? "agent"))}${details?.model ? theme.fg("muted", ` ${details.model}`) : ""}`;
+      const took = !isPartial && durationMs !== undefined ? `${(durationMs / 1000).toFixed(1)}s` : "";
+      const info = [details?.summary, took].filter(Boolean).join(" ");
+      const summary = info ? theme.fg("dim", info) : "";
       if (isPartial) {
         const lines = (details?.activity ?? []).map(line => theme.fg("muted", line));
         return new Text([summary ? `${title} ${summary}` : title, ...(lines.length ? lines : [theme.fg("muted", "starting…")])].join("\n"), 0, 0);
@@ -107,7 +123,20 @@ export default function (pi: ExtensionAPI) {
       if (!ctx.model) throw new Error("An active parent model is required");
       if (active) throw new Error("serial_subagent is busy: a child is still running or cleaning up");
       if (shuttingDown) throw new Error("serial_subagent session is shutting down");
-      const { provider, id: model, contextWindow } = ctx.model;
+      const role = roles[params.agent];
+      const ref = params.model?.trim() || role.model;
+      const parts = ref ? splitModel(ref) : [ctx.model.provider, ctx.model.id];
+      if (!parts) throw new Error(`model must be provider/id, got "${ref}"`);
+      const childModel = ctx.modelRegistry.find(parts[0], parts[1]);
+      if (!childModel) throw new Error(`Unknown model ${parts.join("/")}`);
+      // Virtual models are routed by parent extensions, which the --no-extensions child lacks.
+      if (childModel.api === "pi-virtual") throw new Error(`Virtual model ${parts.join("/")} is unavailable to subagents; pick a physical model`);
+      if (!ctx.modelRegistry.hasConfiguredAuth(childModel)) throw new Error(`No credentials configured for ${parts.join("/")}`);
+      const { provider, id: model, contextWindow } = childModel;
+      // Same clamp Pi applies at startup, so the child's get_state identity check still matches.
+      const thinkingLevel = clampThinkingLevel(childModel, ctx.thinkingLevel ?? "off");
+      // --no-extensions also drops built-ins since Pi 0.99; llama.cpp is a built-in provider.
+      const builtins = provider === "llama.cpp" ? ["-e", "builtin:llama.cpp"] : [];
       const controller = new AbortController();
       let complete!: () => void;
       active = { controller, done: new Promise<void>(resolve => { complete = resolve; }) };
@@ -115,11 +144,9 @@ export default function (pi: ExtensionAPI) {
       signal?.addEventListener("abort", abort, { once: true });
       try {
         if (signal?.aborted) abort();
-        const role = roles[params.agent];
-        const thinkingLevel = ctx.thinkingLevel ?? "off";
         const report = await runChild({
           command: process.execPath,
-          args: [piCommand(), "--mode", "rpc", "--no-session", "--no-extensions", "--no-prompt-templates",
+          args: [piCommand(), "--mode", "rpc", "--no-session", "--no-extensions", "--no-prompt-templates", ...builtins,
             "--tools", role.tools, "--provider", provider, "--model", model, "--thinking", thinkingLevel,
             ctx.isProjectTrusted() ? "--approve" : "--no-approve", "--append-system-prompt", role.prompt],
           cwd: ctx.cwd,
@@ -128,10 +155,10 @@ export default function (pi: ExtensionAPI) {
           signal: controller.signal,
           onProgress: ({ usage, activity }) => {
             const summary = formatUsage(usage, contextWindow);
-            onUpdate?.({ content: [{ type: "text", text: activity.at(-1) ?? "Working…" }], details: { agent: params.agent, summary, activity } });
+            onUpdate?.({ content: [{ type: "text", text: activity.at(-1) ?? "Working…" }], details: { agent: params.agent, model: `${provider}/${model}`, summary, activity } });
           },
         });
-        return { content: [{ type: "text", text: report.text }], details: { agent: params.agent, summary: formatUsage(report.usage, contextWindow), reportPath: report.reportPath } };
+        return { content: [{ type: "text", text: report.text }], details: { agent: params.agent, model: `${provider}/${model}`, summary: formatUsage(report.usage, contextWindow), reportPath: report.reportPath } };
       } finally {
         signal?.removeEventListener("abort", abort);
         active = undefined;

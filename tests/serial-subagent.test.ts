@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { parseFrontmatter, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { parseFrontmatter, type ExtensionAPI, type ExtensionToolContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 const fixture = resolve("tests/fixtures/child.mjs");
 const expected = { provider: "fixture", model: "exact-model", thinkingLevel: "off" as const };
@@ -42,7 +42,16 @@ async function registered(t: test.TestContext, mode = "success") {
   const handlers = new Map<string, (...args: any[]) => any>();
   const api = { registerTool: (value: ToolDefinition) => { tool = value; }, on: (event: string, handler: (...args: any[]) => any) => handlers.set(event, handler) } as unknown as ExtensionAPI;
   (await import("../extensions/serial-subagent.ts")).default(api);
-  const ctx = { cwd, model: { provider: "fixture", id: "exact-model", contextWindow: 1000 }, thinkingLevel: "off", isProjectTrusted: () => false } as ExtensionContext;
+  const models = [
+    { provider: "fixture", id: "exact-model", contextWindow: 1000 },
+    { provider: "fixture", id: "coder", contextWindow: 2000, reasoning: true },
+    { provider: "llama.cpp", id: "local", contextWindow: 3000 },
+    { provider: "fixture", id: "no-auth", contextWindow: 1000 },
+    { provider: "openrouter", id: "anthropic/x", contextWindow: 1000 },
+    { provider: "router", id: "auto", api: "pi-virtual", contextWindow: 1000 },
+  ];
+  const modelRegistry = { find: (p: string, id: string) => models.find(m => m.provider === p && m.id === id), hasConfiguredAuth: (m: { id: string }) => m.id !== "no-auth" };
+  const ctx = { cwd, model: models[0], modelRegistry, thinkingLevel: "high", isProjectTrusted: () => false } as unknown as ExtensionToolContext;
   return { tool, ctx, cwd, handlers };
 }
 
@@ -89,6 +98,7 @@ for (const [mode, error] of [
   ["malformed", /malformed|JSON|protocol/i], ["oversized", /record.*limit|oversized/i],
   ["invalid-shape", /protocol|completion/i], ["prompt-failure", /prompt|RPC/i],
   ["wrong-model", /model|identity/i], ["wrong-thinking", /thinking|identity/i], ["history", /fresh|history|session/i],
+  ["queued", /did not start/i], ["settled-aborted", /abort/i],
 ] as const) {
   test(`runner rejects ${mode} and permits a subsequent call`, async (t) => {
     const runChild = await runner();
@@ -176,9 +186,9 @@ for (const agent of ["worker", "reviewer"]) {
       assert.match(value("--append-system-prompt"), agent === "worker" ? /^You are the worker .*do not claim rollback\.$/ : /^You are the read-only reviewer .*disclose credentials\.$/);
       assert.equal(value("--provider"), "fixture");
       assert.equal(value("--model"), "exact-model");
-      assert.equal(value("--thinking"), "off");
+      assert.equal(value("--thinking"), "off"); // parent "high" clamped: exact-model has no reasoning
       for (const flag of ["--no-session", "--no-extensions", "--no-prompt-templates", trusted ? "--approve" : "--no-approve"]) assert.ok(args.includes(flag));
-      for (const flag of ["--session", "--continue", "--resume", "--fork", "--extension", "--no-skills", "--no-context-files", "--api-key"]) assert.ok(!args.includes(flag));
+      for (const flag of ["--session", "--continue", "--resume", "--fork", "--extension", "-e", "--no-skills", "--no-context-files", "--api-key"]) assert.ok(!args.includes(flag));
       assert.equal(launch.cwd, cwd);
       assert.equal(launch.env, "inherited");
       assert.ok(!args.includes(task));
@@ -187,6 +197,30 @@ for (const agent of ["worker", "reviewer"]) {
     }
   });
 }
+
+test("model override picks the child model, clamps thinking and loads only the llama.cpp built-in", async (t) => {
+  const { tool, ctx, cwd } = await registered(t);
+  const call = async (model: string) => {
+    const result = await tool.execute("call", { agent: "worker", task: "x", model }, undefined, undefined, ctx);
+    const args: string[] = JSON.parse(readFileSync(join(cwd, "launch.json"), "utf8")).args;
+    return { result, value: (flag: string) => args[args.indexOf(flag) + 1], args };
+  };
+  const coder = await call("fixture/coder");
+  assert.equal(coder.value("--model"), "coder");
+  assert.equal(coder.value("--thinking"), "high");
+  assert.equal((coder.result.details as { model: string }).model, "fixture/coder");
+  assert.ok(!coder.args.includes("-e"));
+  const local = await call("llama.cpp/local");
+  assert.equal(local.value("--provider"), "llama.cpp");
+  assert.equal(local.value("-e"), "builtin:llama.cpp");
+  assert.equal(local.args.filter(a => a === "-e").length, 1);
+  assert.equal((await call("openrouter/anthropic/x")).value("--model"), "anthropic/x");
+  rmSync(join(cwd, "started"));
+  for (const [model, error] of [["fixture/missing", /unknown model/i], ["fixture/no-auth", /credentials/i], ["router/auto", /virtual/i], ["noslash", /provider\/id/i], ["fixture/", /provider\/id/i]] as const) {
+    await assert.rejects(() => tool.execute("call", { agent: "worker", task: "x", model }, undefined, undefined, ctx), error);
+  }
+  assert.ok(!existsSync(join(cwd, "started")));
+});
 
 test("busy guard covers invocation and cleanup; abort and shutdown share cleanup", { timeout: 15000 }, async (t) => {
   const { tool, ctx, cwd, handlers } = await registered(t, "ignore-term");
@@ -265,7 +299,9 @@ test("partial updates render live activity instead of a finished checkmark", asy
   await tool.execute("call", { agent: "worker", task: "x" }, undefined, (u: any) => updates.push(u), ctx);
   const theme = { fg: (_: string, s: string) => s, bold: (s: string) => s } as any;
   const lines = tool.renderResult!(updates[0], { expanded: false, isPartial: true }, theme, { isError: false } as any).render(200).join("\n");
-  assert.match(lines, /⏳ worker 1 turn/);
+  assert.match(lines, /⏳ worker fixture\/exact-model 1 turn/);
   assert.match(lines, /intermediate/);
   assert.doesNotMatch(lines, /✓/);
+  const done = tool.renderResult!({ content: [], details: updates.at(-1).details }, { expanded: false, isPartial: false }, theme, { isError: false, durationMs: 1234 } as any).render(200).join("\n");
+  assert.match(done, /✓ worker .*1\.2s/);
 });
