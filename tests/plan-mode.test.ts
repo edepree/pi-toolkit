@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { extractTodoItems, findFinalPlan, isSafeCommand, markCompletedSteps, planFilePath, slugify } from "../extensions/plan-mode/utils.ts";
@@ -50,4 +50,10 @@ test("planFilePath never reuses an existing file", (t) => {
 test("isSafeCommand", () => {
   for (const c of ["git status", "ls -la", "rg foo src"]) assert.equal(isSafeCommand(c), true, c);
   for (const c of ["rm -rf x", "echo hi > f", "npm install", "git commit -m x"]) assert.equal(isSafeCommand(c), false, c);
+});
+
+test("prompt.md carries the final-plan contract and self-review checks", () => {
+  const prompt = readFileSync("extensions/plan-mode/prompt.md", "utf8");
+  for (const s of ["## Plan: <title>", "### Critical files", "### Testing", "### Risks", "### Self-review",
+    "Coverage", "Placeholders", "Consistency", "Scope", "Ambiguity", "one question"]) assert.ok(prompt.includes(s), s);
 });
