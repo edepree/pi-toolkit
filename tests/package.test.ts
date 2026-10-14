@@ -22,7 +22,7 @@ test("Pi discovers Janitor from the declared skill paths without warnings", () =
   assert.equal(skills.every(s => !s.disableModelInvocation), true);
 });
 
-test("actual Pi resource loader discovers the registered sequential extension in isolated settings", async (t) => {
+test("actual Pi resource loader discovers both registered extensions in isolated settings", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "pi-toolkit-loader-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const loader = new DefaultResourceLoader({
@@ -33,9 +33,12 @@ test("actual Pi resource loader discovers the registered sequential extension in
   await loader.reload();
   const result = loader.getExtensions();
   assert.deepEqual(result.errors, []);
-  assert.equal(result.extensions.length, 1);
-  const tools = result.extensions[0]!.tools;
+  assert.equal(result.extensions.length, 2);
+  const tools = result.extensions.find(e => e.tools.has("serial_subagent"))!.tools;
   assert.deepEqual([...tools.keys()], ["serial_subagent"]);
   assert.equal(tools.get("serial_subagent")!.definition.executionMode, "sequential");
   assert.equal(tools.get("serial_subagent")!.definition.exposure, "model-only");
+  const plan = result.extensions.find(e => e.commands.has("plan"))!;
+  assert.deepEqual([...plan.commands.keys()].sort(), ["plan", "todos"]);
+  assert.equal(plan.flags.has("plan"), true);
 });

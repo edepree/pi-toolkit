@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { extractTodoItems, findFinalPlan, isSafeCommand, markCompletedSteps, planFilePath, slugify } from "../extensions/plan-mode/utils.ts";
@@ -56,4 +56,73 @@ test("prompt.md carries the final-plan contract and self-review checks", () => {
   const prompt = readFileSync("extensions/plan-mode/prompt.md", "utf8");
   for (const s of ["## Plan: <title>", "### Critical files", "### Testing", "### Risks", "### Self-review",
     "Coverage", "Placeholders", "Consistency", "Scope", "Ambiguity", "one question"]) assert.ok(prompt.includes(s), s);
+});
+
+// Drives the real extension with a fake Pi, covering the save/execute menu that needs a UI.
+async function planSession(t: test.TestContext, choice: string) {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-toolkit-plan-ext-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const handlers = new Map<string, Function>();
+  const commands = new Map<string, { handler: Function }>();
+  const sent: { content: string }[] = [];
+  const notes: { msg: string; level: string | undefined }[] = [];
+  let tools = ["read", "bash", "edit", "write"];
+  const pi = {
+    registerFlag() {}, registerShortcut() {}, getFlag: () => false, appendEntry() {}, sendUserMessage() {},
+    registerCommand: (name: string, c: { handler: Function }) => commands.set(name, c),
+    on: (event: string, fn: Function) => handlers.set(event, fn),
+    getActiveTools: () => tools,
+    setActiveTools: (next: string[]) => { tools = next; },
+    sendMessage: (m: { content: string }) => sent.push(m),
+  };
+  const ctx = {
+    cwd, hasUI: true,
+    ui: {
+      select: async () => choice, editor: async () => undefined, setStatus() {}, setWidget() {},
+      notify: (msg: string, level?: string) => notes.push({ msg, level }),
+      theme: { fg: (_: string, s: string) => s, strikethrough: (s: string) => s },
+    },
+  };
+  const { default: planMode } = await import("../extensions/plan-mode/index.ts");
+  planMode(pi as unknown as Parameters<typeof planMode>[0]);
+  await commands.get("plan")!.handler("", ctx);
+  const finish = (text: string) => handlers.get("agent_end")!({ messages: [{ role: "assistant", content: [{ type: "text", text }] }] }, ctx);
+  return { cwd, sent, notes, tools: () => tools, finish };
+}
+
+test("Save only writes the plan, never overwrites, and stays in plan mode", async (t) => {
+  const s = await planSession(t, "Save only");
+  await s.finish(plan);
+  await s.finish(plan);
+  const files = readdirSync(join(s.cwd, "docs", "plans")).sort();
+  assert.equal(files.length, 2);
+  assert.match(files[0]!, /^\d{4}-\d{2}-\d{2}-add-login-2\.md$/);
+  assert.equal(readFileSync(join(s.cwd, "docs", "plans", files[1]!), "utf8"), `${plan.slice(plan.indexOf("## Plan:"))}\n`);
+  assert.equal(s.tools().includes("edit"), false);
+  assert.equal(s.sent.length, 0);
+});
+
+test("a reply without the final heading shows no menu and saves nothing", async (t) => {
+  const s = await planSession(t, "Save only");
+  await s.finish("Which option? A) one B) two");
+  assert.equal(existsSync(join(s.cwd, "docs")), false);
+});
+
+test("Save & execute restores tools and sends tracked steps naming the file", async (t) => {
+  const s = await planSession(t, "Save & execute");
+  await s.finish(plan);
+  assert.equal(s.tools().includes("edit"), true);
+  const exec = s.sent.at(-1)!.content;
+  assert.match(exec, /^Execute the plan in docs\/plans\/\d{4}-\d{2}-\d{2}-add-login\.md\./);
+  assert.match(exec, /1\. Login form\n2\. Wire the session store/);
+  assert.match(exec, /\[DONE:n\]/);
+});
+
+test("a failed save notifies an error and keeps plan mode", async (t) => {
+  const s = await planSession(t, "Save & execute");
+  writeFileSync(join(s.cwd, "docs"), "not a directory");
+  await s.finish(plan);
+  assert.equal(s.notes.at(-1)?.level, "error");
+  assert.equal(s.tools().includes("edit"), false);
+  assert.equal(s.sent.length, 0);
 });

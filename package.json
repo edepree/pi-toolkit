@@ -1,7 +1,7 @@
 {
   "name": "pi-toolkit",
   "version": "0.5.0",
-  "description": "Pi toolkit with Janitor cleanup, Code Simplifier refinement, Lean Comments, and blocking serial worker/reviewer delegation.",
+  "description": "Pi toolkit with Janitor cleanup, Code Simplifier refinement, Lean Comments, read-only Plan Mode, and blocking serial worker/reviewer delegation.",
   "type": "module",
   "keywords": [
     "pi-package"
@@ -23,7 +23,8 @@
       "./skills"
     ],
     "extensions": [
-      "./extensions/serial-subagent.ts"
+      "./extensions/serial-subagent.ts",
+      "./extensions/plan-mode/index.ts"
     ]
   },
   "scripts": {

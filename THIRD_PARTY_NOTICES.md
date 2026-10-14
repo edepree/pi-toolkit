@@ -111,3 +111,56 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Pi plan-mode example
+
+`extensions/plan-mode/index.ts` and `extensions/plan-mode/utils.ts` adapt Pi's
+plan-mode example. Changes: the injected prompt is replaced by
+`extensions/plan-mode/prompt.md`, only a `## Plan: <title>` heading triggers
+the menu, the extension saves the plan to `docs/plans/` without overwriting,
+execution names the saved file, steps stop at the first `###` subsection, and
+the code is adjusted for this repository's strict TypeScript settings.
+
+- Source: [`packages/coding-agent/examples/extensions/plan-mode/`](https://github.com/earendil-works/pi/tree/main/packages/coding-agent/examples/extensions/plan-mode)
+- Reference version: installed `@earendil-works/pi-coding-agent` **1.1.0**
+- License: MIT, same upstream license and notice as the Pi subagent example above.
+
+## Superpowers brainstorming skill
+
+The Understand, Approaches and Self-review phases of
+`extensions/plan-mode/prompt.md` adapt guidance from the **brainstorming** skill
+in [obra/superpowers](https://github.com/obra/superpowers): one question per
+message, writing back understanding, 2-3 approaches with a recommendation, and a
+self-review checklist. The visual companion, spec files and skill hand-offs are
+not included.
+
+- Source: [`skills/brainstorming/SKILL.md`](https://github.com/obra/superpowers/blob/8ca22dba9a94f28898bbce59f2537ff4d87c747d/skills/brainstorming/SKILL.md)
+- License: [`LICENSE`](https://github.com/obra/superpowers/blob/8ca22dba9a94f28898bbce59f2537ff4d87c747d/LICENSE)
+- Upstream revision: `8ca22dba9a94f28898bbce59f2537ff4d87c747d`
+
+The following upstream license applies to the adapted material. It does not
+establish a license for unrelated original repository code.
+
+```text
+MIT License
+
+Copyright (c) 2025 Jesse Vincent
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

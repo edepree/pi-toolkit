@@ -1,6 +1,6 @@
 # pi-toolkit
 
-A [Pi package](https://github.com/earendil-works/pi) with **Janitor**, a deletion-first cleanup skill, **Code Simplifier**, a behavior-preserving refinement skill, **Lean Comments**, a minimal-commentary skill, and **`serial_subagent`**, a blocking handoff to a worker or read-only reviewer.
+A [Pi package](https://github.com/earendil-works/pi) with **Janitor**, a deletion-first cleanup skill, **Code Simplifier**, a behavior-preserving refinement skill, **Lean Comments**, a minimal-commentary skill, **Plan Mode**, a read-only planning mode that saves and executes approved plans, and **`serial_subagent`**, a blocking handoff to a worker or read-only reviewer.
 
 > **Security:** This is context isolation, not a sandbox. Child extensions are disabled, so parent permission/sandbox extensions are **not inherited**. Workers have your full filesystem and shell privileges. Serialization is per Pi session, not server-wide. POSIX (Linux, macOS) and a Node-installed Pi only; Windows is unsupported.
 
@@ -36,6 +36,23 @@ By default it refines only uncommitted changes, following the project's own conv
 ```
 
 Defaults to no comment unless it preserves non-obvious information the code can't show.
+
+## Plan Mode
+
+Toggle with `/plan` or `Ctrl+Alt+P`, or start with `pi --plan`. The flag takes the next argument as its value, so put a prompt before it: `pi -p "prompt" --plan`. `/todos` shows progress. While planning, `edit` and `write` are off and bash only runs allowlisted read-only commands. The allowlist is pattern matching that guards against accidents. It is not a sandbox.
+
+The agent follows [`prompt.md`](extensions/plan-mode/prompt.md) through five phases: understand (one question per message), explore the code, propose 2–3 approaches, and after your approval write a final plan under `## Plan: <title>`, which ends with a self-review. Edit `prompt.md` to tune the agent's behavior.
+
+Only a reply containing `## Plan: <title>` brings up the menu:
+
+- **Save & execute** writes the plan to `docs/plans/YYYY-MM-DD-<slug>.md`, restores your tools, and runs the steps with `[DONE:n]` progress tracking.
+- **Save only** writes the file and stays in plan mode.
+- **Refine** sends your feedback.
+- **Stay** does nothing.
+
+The extension writes the file, not the agent, and never overwrites one (it adds `-2`, `-3`, …). If the save fails, you get an error and plan mode stays on.
+
+If you copied Pi's example plan mode into `~/.pi/agent/extensions/`, remove it. Both register `/plan`.
 
 ## serial_subagent
 
