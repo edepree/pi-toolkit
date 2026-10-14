@@ -135,12 +135,17 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		});
 	}
 
+	function localDate(): string {
+		const d = new Date();
+		return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+	}
+
 	// Returns the path relative to cwd, or undefined (after notifying) when the write fails.
 	function savePlan(ctx: ExtensionContext, plan: FinalPlan): string | undefined {
 		try {
 			const dir = join(ctx.cwd, "docs", "plans");
 			mkdirSync(dir, { recursive: true });
-			const path = planFilePath(dir, new Date().toLocaleDateString("en-CA"), plan.title);
+			const path = planFilePath(dir, localDate(), plan.title);
 			writeFileSync(path, `${plan.body.trimEnd()}\n`, { flag: "wx" });
 			const rel = relative(ctx.cwd, path);
 			ctx.ui.notify(`Plan saved to ${rel}`, "info");
@@ -294,7 +299,9 @@ After completing a step, include a [DONE:n] tag in your response.`,
 		if (!planModeEnabled || !ctx.hasUI) return;
 
 		const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
-		const plan = lastAssistant && findFinalPlan(getTextContent(lastAssistant));
+		// A cancelled or failed reply may hold a truncated plan.
+		if (!lastAssistant || lastAssistant.stopReason === "aborted" || lastAssistant.stopReason === "error") return;
+		const plan = findFinalPlan(getTextContent(lastAssistant));
 		if (!plan) return;
 
 		const choice = await ctx.ui.select("Plan ready — what next?", ["Save & execute", "Save only", "Refine", "Stay"]);
@@ -326,10 +333,7 @@ After completing a step, include a [DONE:n] tag in your response.`,
 				{ triggerTurn: true, deliverAs: "followUp" },
 			);
 		} else if (choice === "Save only") {
-			const saved = savePlan(ctx, plan);
-			if (!saved) return;
-			planFile = saved;
-			persistState();
+			savePlan(ctx, plan);
 		} else if (choice === "Refine") {
 			const refinement = await ctx.ui.editor("Refine the plan:", "");
 			if (refinement?.trim()) {
@@ -344,7 +348,7 @@ After completing a step, include a [DONE:n] tag in your response.`,
 			planModeEnabled = true;
 		}
 
-		const entries = ctx.sessionManager.getEntries();
+		const entries = ctx.sessionManager.getBranch();
 
 		// Restore persisted state
 		const planModeEntry = entries

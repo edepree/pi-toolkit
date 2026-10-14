@@ -27,6 +27,13 @@ test("extractTodoItems reads only steps before the first ### subsection", () => 
   assert.equal(items.every(i => !i.completed), true);
 });
 
+test("extractTodoItems keeps the plan's own numbers, markup steps and skips nested lists", () => {
+  const items = extractTodoItems("## Plan: X\n1. Add **slugify** to utils\n2. **`utils.ts`**: export it\n   1. nested detail\n3. Run the tests\n### Testing\n- ok");
+  assert.deepEqual(items.map(i => i.step), [1, 2, 3]);
+  assert.equal(items[0]!.text, "Slugify to utils");
+  assert.equal(items[1]!.text, "Utils.ts: export it");
+});
+
 test("markCompletedSteps marks [DONE:n]", () => {
   const items = extractTodoItems(findFinalPlan(plan)!.body);
   assert.equal(markCompletedSteps("did it [DONE:2]", items), 1);
@@ -86,7 +93,7 @@ async function planSession(t: test.TestContext, choice: string) {
   const { default: planMode } = await import("../extensions/plan-mode/index.ts");
   planMode(pi as unknown as Parameters<typeof planMode>[0]);
   await commands.get("plan")!.handler("", ctx);
-  const finish = (text: string) => handlers.get("agent_end")!({ messages: [{ role: "assistant", content: [{ type: "text", text }] }] }, ctx);
+  const finish = (text: string, stopReason = "stop") => handlers.get("agent_end")!({ messages: [{ role: "assistant", stopReason, content: [{ type: "text", text }] }] }, ctx);
   return { cwd, sent, notes, tools: () => tools, finish };
 }
 
@@ -102,9 +109,10 @@ test("Save only writes the plan, never overwrites, and stays in plan mode", asyn
   assert.equal(s.sent.length, 0);
 });
 
-test("a reply without the final heading shows no menu and saves nothing", async (t) => {
+test("a reply without the final heading, or an aborted one, shows no menu and saves nothing", async (t) => {
   const s = await planSession(t, "Save only");
   await s.finish("Which option? A) one B) two");
+  await s.finish(plan, "aborted");
   assert.equal(existsSync(join(s.cwd, "docs")), false);
 });
 

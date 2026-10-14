@@ -118,12 +118,14 @@ SOFTWARE.
 plan-mode example. Changes: the injected prompt is replaced by
 `extensions/plan-mode/prompt.md`, only a `## Plan: <title>` heading triggers
 the menu, the extension saves the plan to `docs/plans/` without overwriting,
-execution names the saved file, steps stop at the first `###` subsection, and
+execution names the saved file, steps are the top-level numbered items before the
+first `###` subsection and keep the plan's own numbers, aborted replies are ignored,
+session state is restored from the current branch, and
 the code is adjusted for this repository's strict TypeScript settings.
 
-- Source: [`packages/coding-agent/examples/extensions/plan-mode/`](https://github.com/earendil-works/pi/tree/main/packages/coding-agent/examples/extensions/plan-mode)
+- Source: [`packages/coding-agent/examples/extensions/plan-mode/`](https://github.com/earendil-works/pi/tree/v1.1.0/packages/coding-agent/examples/extensions/plan-mode)
 - Reference version: installed `@earendil-works/pi-coding-agent` **1.1.0**
-- License: MIT, same upstream license and notice as the Pi subagent example above.
+- License: [`LICENSE` at v1.1.0](https://github.com/earendil-works/pi/blob/v1.1.0/LICENSE), MIT with the same notice as the Pi subagent example above.
 
 ## Superpowers brainstorming skill
 

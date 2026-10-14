@@ -39,7 +39,7 @@ Defaults to no comment unless it preserves non-obvious information the code can'
 
 ## Plan Mode
 
-Toggle with `/plan` or `Ctrl+Alt+P`, or start with `pi --plan`. The flag takes the next argument as its value, so put a prompt before it: `pi -p "prompt" --plan`. `/todos` shows progress. While planning, `edit` and `write` are off and bash only runs allowlisted read-only commands. The allowlist is pattern matching that guards against accidents. It is not a sandbox.
+Toggle with `/plan` or `Ctrl+Alt+P`, or start with `pi --plan`. The flag takes the next argument as its value, so put it after any prompt: `pi "prompt" --plan`. The menu below needs the interactive UI, so it never appears with `-p`. `/todos` shows progress. While planning, `edit` and `write` are off and bash only runs allowlisted read-only commands. The allowlist is pattern matching that guards against accidents. It is not a sandbox.
 
 The agent follows [`prompt.md`](extensions/plan-mode/prompt.md) through five phases: understand (one question per message), explore the code, propose 2–3 approaches, and after your approval write a final plan under `## Plan: <title>`, which ends with a self-review. Edit `prompt.md` to tune the agent's behavior.
 

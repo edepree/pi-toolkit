@@ -143,19 +143,10 @@ export function extractTodoItems(body: string): TodoItem[] {
 	const afterHeading = body.slice(body.indexOf("\n") + 1 || body.length);
 	const end = afterHeading.search(/^###\s/m);
 	const planSection = end === -1 ? afterHeading : afterHeading.slice(0, end);
-	const numberedPattern = /^\s*(\d+)[.)]\s+\*{0,2}([^*\n]+)/gm;
-
-	for (const match of planSection.matchAll(numberedPattern)) {
-		const text = (match[2] ?? "")
-			.trim()
-			.replace(/\*{1,2}$/, "")
-			.trim();
-		if (text.length > 5 && !text.startsWith("`") && !text.startsWith("/") && !text.startsWith("-")) {
-			const cleaned = cleanStepText(text);
-			if (cleaned.length > 3) {
-				items.push({ step: items.length + 1, text: cleaned, completed: false });
-			}
-		}
+	// Top-level items only; numbers come from the plan so [DONE:n] matches the saved file.
+	for (const match of planSection.matchAll(/^(\d+)[.)]\s+(.+)$/gm)) {
+		const text = cleanStepText(match[2] ?? "");
+		if (text) items.push({ step: Number(match[1]), text, completed: false });
 	}
 	return items;
 }
