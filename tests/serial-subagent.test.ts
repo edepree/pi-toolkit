@@ -38,7 +38,7 @@ async function failed(result: Promise<{ content: unknown[]; isError?: boolean }>
   return value;
 }
 async function runner() {
-  return (await import("../lib/run-child.ts")).runChild;
+  return (await import("../extensions/serial-subagent/run-child.ts")).runChild;
 }
 async function registered(t: test.TestContext, mode = "success") {
   const cwd = temporary(t);
@@ -48,7 +48,7 @@ async function registered(t: test.TestContext, mode = "success") {
   let tool!: ToolDefinition;
   const handlers = new Map<string, (...args: any[]) => any>();
   const api = { registerTool: (value: ToolDefinition) => { tool = value; }, on: (event: string, handler: (...args: any[]) => any) => handlers.set(event, handler) } as unknown as ExtensionAPI;
-  (await import("../extensions/serial-subagent.ts")).default(api);
+  (await import("../extensions/serial-subagent/index.ts")).default(api);
   const models = [
     { provider: "fixture", id: "exact-model", contextWindow: 1000 },
     { provider: "fixture", id: "coder", contextWindow: 2000, reasoning: true },
@@ -68,7 +68,7 @@ test("extension registers one sequential tool and rejects invalid calls before l
   assert.equal(tool.executionMode, "sequential");
   assert.deepEqual((tool.parameters as { required?: string[] }).required, ["agent", "task"]);
   for (const name of ["worker", "reviewer"]) {
-    const { frontmatter } = parseFrontmatter<{ description: string }>(readFileSync(`agents/${name}.md`, "utf8"));
+    const { frontmatter } = parseFrontmatter<{ description: string }>(readFileSync(`extensions/serial-subagent/agents/${name}.md`, "utf8"));
     assert.ok(tool.description.includes(`${name}: ${frontmatter.description}`));
     assert.ok(tool.promptGuidelines!.some(line => line.includes(`${name}: ${frontmatter.description}`)));
   }

@@ -73,9 +73,9 @@ Changes from upstream:
 
 ## Pi subagent example
 
-`extensions/serial-subagent.ts` and `lib/run-child.ts` adapt the subprocess-delegation
-approach of Pi's subagent example. Changes: agents are loaded only from the
-package's `agents/` directory, calls run one at a time, the child's model is
+`extensions/serial-subagent/index.ts` and `extensions/serial-subagent/run-child.ts`
+adapt the subprocess-delegation approach of Pi's subagent example. Changes: agents
+are loaded only from the extension's own `agents/` directory, calls run one at a time, the child's model is
 verified over RPC before the task is sent, output parsing and reports are
 size-limited, and the child's process tree is cleaned up on Linux. They do not
 include the example's user/project agent discovery, parallel/chain scheduler,

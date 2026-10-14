@@ -58,11 +58,11 @@ If you copied Pi's example plan mode into `~/.pi/agent/extensions/`, remove it. 
 
 The parent model calls the tool with an `agent` name, a self-contained `task` covering objectives, paths, constraints and completion criteria, and an optional `model`. No conversation history is copied.
 
-Agents are defined in [`agents/`](agents): [`worker`](agents/worker.md) edits files and runs checks, and [`reviewer`](agents/reviewer.md) is read-only. Each file's frontmatter sets `name` (the `agent` value), `description` (shown to the parent model), `tools` (the child's tool allowlist) and optionally `model` (`provider/id`, the agent's default model). The body is appended to the child's system prompt. Adding a file adds an agent.
+Agents are defined in [`extensions/serial-subagent/agents/`](extensions/serial-subagent/agents): [`worker`](extensions/serial-subagent/agents/worker.md) edits files and runs checks, and [`reviewer`](extensions/serial-subagent/agents/reviewer.md) is read-only. Each file's frontmatter sets `name` (the `agent` value), `description` (shown to the parent model), `tools` (the child's tool allowlist) and optionally `model` (`provider/id`, the agent's default model). The body is appended to the child's system prompt. Adding a file adds an agent.
 
 ### Choosing the child model
 
-The child runs on the call's `model`, else the agent's `model`, else the parent's model. For example, to orchestrate with Opus but write code with Sonnet, add `model: anthropic/claude-sonnet-5-5` (use the exact `provider/id` shown in `/model`) to [`agents/worker.md`](agents/worker.md), or ask the parent to pass `model` for a single call. The model must be known to Pi and have credentials, or the call fails before launch. The parent's thinking level is clamped to what the child model supports, the same way Pi clamps it.
+The child runs on the call's `model`, else the agent's `model`, else the parent's model. For example, to orchestrate with Opus but write code with Sonnet, add `model: anthropic/claude-sonnet-5-5` (use the exact `provider/id` shown in `/model`) to [`extensions/serial-subagent/agents/worker.md`](extensions/serial-subagent/agents/worker.md), or ask the parent to pass `model` for a single call. The model must be known to Pi and have credentials, or the call fails before launch. The parent's thinking level is clamped to what the child model supports, the same way Pi clamps it.
 
 Typical flow: `parent → worker → parent → reviewer → parent`. The reviewer can't run `git diff` or tests, so include the diff (or a saved patch path) and the worker's test output in the review task.
 

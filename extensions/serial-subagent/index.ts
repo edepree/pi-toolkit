@@ -4,7 +4,7 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, getPackageDir, getMar
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { StringEnum, clampThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { ChildError, runChild, type ChildStats } from "../lib/run-child.ts";
+import { ChildError, runChild, type ChildStats } from "./run-child.ts";
 
 function formatTokens(count: number): string {
   if (count < 1000) return count.toString();
@@ -35,7 +35,7 @@ function splitModel(ref: string): [string, string] | undefined {
   return slash > 0 && slash < ref.length - 1 ? [ref.slice(0, slash), ref.slice(slash + 1)] : undefined;
 }
 
-const agentsDir = resolve(import.meta.dirname, "../agents");
+const agentsDir = resolve(import.meta.dirname, "agents");
 interface Agent { name: string; description: string; tools: string; model?: string; prompt: string }
 function loadAgent(file: string): Agent {
   const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(readFileSync(resolve(agentsDir, file), "utf8"));

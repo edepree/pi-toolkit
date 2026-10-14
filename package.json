@@ -13,8 +13,6 @@
   "files": [
     "skills",
     "extensions",
-    "agents",
-    "lib",
     "README.md",
     "THIRD_PARTY_NOTICES.md"
   ],
@@ -23,7 +21,7 @@
       "./skills"
     ],
     "extensions": [
-      "./extensions/serial-subagent.ts",
+      "./extensions/serial-subagent/index.ts",
       "./extensions/plan-mode/index.ts"
     ]
   },
