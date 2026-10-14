@@ -101,7 +101,7 @@ for (const [mode, error] of [
   ["fail-after-final", /exit.*7/i], ["signal-exit", /signal|SIGUSR2/i],
   ["model-error", /model.*error/i], ["model-abort", /abort/i],
   ["missing", /completion|final|report/i], ["intermediate-only", /completion|final|report/i],
-  ["tool-only", /completion|final|report/i], ["length", /completion|length/i],
+  ["tool-only", /completion|final|report/i], ["length", /cut off|output token limit/i],
   ["malformed", /malformed|JSON|protocol/i], ["oversized", /record.*limit|oversized/i],
   ["prompt-failure", /prompt|RPC/i],
   ["wrong-model", /model|identity/i], ["wrong-thinking", /thinking|identity/i],

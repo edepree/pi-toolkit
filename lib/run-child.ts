@@ -153,6 +153,7 @@ export async function runChild(options: ChildOptions): Promise<ChildReport> {
       ended = true;
     } else if (event.type === "agent_settled") {
       if (event.aborted) throw new Error("Child run aborted");
+      if (final?.stopReason === "length") throw new Error("Child report was cut off at the model's output token limit");
       if (phase !== "running" || !ended || !final || final.stopReason !== "stop" || final.content.some(part => part.type === "toolCall")) throw new Error("Missing or invalid final completion report");
       phase = "settled";
       proc.stdin.end(); // On stdin EOF, Pi RPC mode shuts down and exits 0.
