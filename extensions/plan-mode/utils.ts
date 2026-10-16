@@ -64,7 +64,7 @@ const SAFE_PATTERNS = [
 	/^\s*which\b/,
 	/^\s*whereis\b/,
 	/^\s*type\b/,
-	/^\s*env\b/,
+	/^\s*env\s*$/,
 	/^\s*printenv\b/,
 	/^\s*uname\b/,
 	/^\s*whoami\b/,
@@ -81,11 +81,14 @@ const SAFE_PATTERNS = [
 	/^\s*npm\s+(list|ls|view|info|search|outdated|audit)/i,
 	/^\s*yarn\s+(list|info|why|audit)/i,
 	/^\s*node\s+--version/i,
-	/^\s*python\s+--version/i,
-	/^\s*curl\s/i,
+	/^\s*python3?\s+(--version|-V)\s*$/i,
+	/^\s*(python3?\s+-m\s+)?pip3?\s+(show|list|freeze|index\s+versions)\b/i,
+	/^\s*uv\s+pip\s+(show|list|freeze)\b/i,
+	// curl may only print to stdout: every flag must be in this list (no -o, -d, -X, ...).
+	/^\s*curl(\s+(-[sSLfIi]+|--(silent|show-error|location|fail|head|include|compressed)|(-m|--max-time)\s+\d+|[^-\s]\S*))+\s*$/,
 	/^\s*wget\s+-O\s*-/i,
 	/^\s*jq\b/,
-	/^\s*sed\s+-n/i,
+	/^\s*sed\b/,
 	/^\s*awk\b/,
 	/^\s*rg\b/,
 	/^\s*fd\b/,
@@ -93,10 +96,23 @@ const SAFE_PATTERNS = [
 	/^\s*eza\b/,
 ];
 
+// Allowlisted commands whose flags still write or execute.
+const UNSAFE_SEGMENT_PATTERNS = [/^\s*find\b.*\s-(delete|exec|execdir|ok|okdir|fprint\w*|fls)\b/, /^\s*sed\b.*\s(-[a-zA-Z]*i|--in-place)/];
+
+// shortcut: quoted sed/awk scripts are not inspected (sed `w`, awk `system()`), so this is not a sandbox; use an OS sandbox if that matters.
 export function isSafeCommand(command: string): boolean {
-	const isDestructive = DESTRUCTIVE_PATTERNS.some((p) => p.test(command));
-	const isSafe = SAFE_PATTERNS.some((p) => p.test(command));
-	return !isDestructive && isSafe;
+	const singleStripped = command.replace(/'[^']*'/g, "''");
+	if (/\$\(|`|<\(/.test(singleStripped)) return false;
+	const stripped = singleStripped
+		.replace(/"(?:[^"\\]|\\.)*"/g, '""')
+		.replace(/[&\d]?>\s*\/dev\/null\b|\d?>&\d\b/g, "");
+	if (/['"]/.test(stripped.replace(/''|""/g, ""))) return false; // unbalanced quote
+	if (DESTRUCTIVE_PATTERNS.some((p) => p.test(stripped))) return false;
+	const segments = stripped.split(/\|\|?|&&|[;&\n]/).filter((s) => s.trim());
+	return (
+		segments.length > 0 &&
+		segments.every((s) => SAFE_PATTERNS.some((p) => p.test(s)) && !UNSAFE_SEGMENT_PATTERNS.some((p) => p.test(s)))
+	);
 }
 
 export interface TodoItem {

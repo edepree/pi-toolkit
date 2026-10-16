@@ -1,11 +1,11 @@
 /**
  * Plan Mode Extension, adapted from Pi's examples/extensions/plan-mode.
  *
- * Read-only planning: the agent shapes a plan with the user (prompt.md), then a
+ * Guarded planning: the agent follows skills/plan/SKILL.md under the restrictions in prompt.md, then a
  * final `## Plan: <title>` section offers to save it to docs/plans/ and execute it.
  *
  * - /plan command or Ctrl+Alt+P to toggle, --plan to start in plan mode
- * - Bash restricted to allowlisted read-only commands
+ * - Bash restricted to allowlisted read-only commands (best effort, not a sandbox)
  * - The extension, not the agent, writes the plan file
  * - [DONE:n] markers track progress during execution
  */
@@ -26,7 +26,8 @@ import {
 	type TodoItem,
 } from "./utils.ts";
 
-const PROMPT = readFileSync(resolve(import.meta.dirname, "prompt.md"), "utf8");
+const SKILL = readFileSync(resolve(import.meta.dirname, "../../skills/plan/SKILL.md"), "utf8").replace(/^---\n[\s\S]*?\n---\n/, "");
+const PROMPT = `${readFileSync(resolve(import.meta.dirname, "prompt.md"), "utf8")}\n${SKILL}`;
 
 // Tools
 const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls"];
@@ -63,7 +64,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	let planFile: string | undefined;
 
 	pi.registerFlag("plan", {
-		description: "Start in plan mode (read-only exploration)",
+		description: "Start in guarded plan mode (best-effort read-only)",
 		type: "boolean",
 		default: false,
 	});
@@ -74,7 +75,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			const completed = todoItems.filter((t) => t.completed).length;
 			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("accent", `📋 ${completed}/${todoItems.length}`));
 		} else if (planModeEnabled) {
-			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", "⏸ plan"));
+			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", "⏸ plan (guarded)"));
 		} else {
 			ctx.ui.setStatus("plan-mode", undefined);
 		}
@@ -164,7 +165,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 
 		if (planModeEnabled) {
 			enablePlanModeTools();
-			ctx.ui.notify("Plan mode enabled. Built-in write tools disabled.");
+			ctx.ui.notify("Guarded plan mode on: edit/write off, bash allowlisted (best effort, not a sandbox).");
 		} else {
 			restoreNormalModeTools();
 			ctx.ui.notify("Plan mode disabled. Full access restored.");
@@ -174,7 +175,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	}
 
 	pi.registerCommand("plan", {
-		description: "Toggle plan mode (read-only exploration)",
+		description: "Toggle guarded plan mode (best-effort read-only)",
 		handler: async (_args, ctx) => togglePlanMode(ctx),
 	});
 

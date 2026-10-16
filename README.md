@@ -1,6 +1,6 @@
 # pi-toolkit
 
-A [Pi package](https://github.com/earendil-works/pi) with **Janitor**, a deletion-first cleanup skill, **Code Simplifier**, a behavior-preserving refinement skill, **Lean Comments**, a minimal-commentary skill, **Plan Mode**, a read-only planning mode that saves and executes approved plans, and **`serial_subagent`**, a blocking handoff to a worker or read-only reviewer.
+A [Pi package](https://github.com/earendil-works/pi) with **Janitor**, a deletion-first cleanup skill, **Code Simplifier**, a behavior-preserving refinement skill, **Lean Comments**, a minimal-commentary skill, **Plan**, a planning skill with an optional guarded Plan Mode (best-effort read-only) that saves and executes approved plans, and **`serial_subagent`**, a blocking handoff to a worker or read-only reviewer.
 
 > **Security:** This is context isolation, not a sandbox. Child extensions are disabled, so parent permission/sandbox extensions are **not inherited**. Workers have your full filesystem and shell privileges. Serialization is per Pi session, not server-wide. POSIX (Linux, macOS) and a Node-installed Pi only; Windows is unsupported.
 
@@ -37,11 +37,18 @@ By default it refines only uncommitted changes, following the project's own conv
 
 Defaults to no comment unless it preserves non-obvious information the code can't show.
 
-## Plan Mode
+## Plan
+
+The method lives in [`skills/plan/SKILL.md`](skills/plan/SKILL.md). Use it two ways:
+
+- **`/skill:plan`** follows the method with no controls. It only runs when you invoke it; the agent never picks it on its own. The agent keeps every tool and is only asked not to change anything until you approve; then it saves the plan to `docs/plans/` and carries it out. Use this inside a sandbox, or when you supervise.
+- **`/plan`** (guarded plan mode) adds best-effort controls on top, described below.
+
+### Guarded plan mode
 
 Toggle with `/plan` or `Ctrl+Alt+P`, or start with `pi --plan`. The flag takes the next argument as its value, so put it after any prompt: `pi "prompt" --plan`. The menu below needs the interactive UI, so it never appears with `-p`. `/todos` shows progress. While planning, `edit` and `write` are off and bash only runs allowlisted read-only commands. The allowlist is pattern matching that guards against accidents. It is not a sandbox.
 
-The agent follows [`prompt.md`](extensions/plan-mode/prompt.md) through five phases: understand (one question per message), explore the code, propose 2–3 approaches, and after your approval write a final plan under `## Plan: <title>`, which ends with a self-review. Edit `prompt.md` to tune the agent's behavior.
+The agent follows the skill through five phases: understand (one question per message), explore the code, propose 2–3 approaches, and after your approval write a final plan under `## Plan: <title>`, which ends with a self-review. Edit `SKILL.md` to tune the method for both; [`prompt.md`](extensions/plan-mode/prompt.md) holds only the guarded-mode restrictions.
 
 Only a reply containing `## Plan: <title>` brings up the menu:
 
